@@ -1,0 +1,25 @@
+# --- Save games: never commit them ---
+# The game itself saves to %APPDATA%\Macromedia\Flash Player\#SharedObjects\...\localhost\robokill2.sol,
+# outside this folder, so pulling or pushing can't touch anyone's saves. These rules are a safety net
+# in case someone copies a save file into the repo.
+*.sol
+*.sor
+*.sav
+saves/
+\#SharedObjects/
+
+# Flash debug-player files
+flashlog.txt
+mm.cfg
+
+# Build tools and output (build\build.ps1 downloads/creates these)
+tools/
+out/
+
+# OS / editor clutter
+Thumbs.db
+desktop.ini
+.DS_Store
+*.tmp
+.vscode/
+.idea/

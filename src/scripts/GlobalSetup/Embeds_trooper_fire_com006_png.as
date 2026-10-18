@@ -1,0 +1,15 @@
+package GlobalSetup
+{
+   import mx.core.BitmapAsset;
+   
+   [Embed(source="/_assets/1865_GlobalSetup.Embeds_trooper_fire_com006_png.png")]
+   public class Embeds_trooper_fire_com006_png extends BitmapAsset
+   {
+      
+      public function Embeds_trooper_fire_com006_png()
+      {
+         super();
+      }
+   }
+}
+

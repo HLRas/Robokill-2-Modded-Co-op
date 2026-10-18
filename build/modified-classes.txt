@@ -1,0 +1,9 @@
+# Classes changed from the original game. Only these are compiled back into original/Robokill2.swf.
+# Paths are relative to src/scripts. Add a line here when you change another class.
+Tools/Input.as
+ObjectBase/PlayerBase.as
+Scenes/MainScene.as
+GameScene/GameScene.as
+Objects/ChargeLaserBullet.as
+Weapons/ChargeLaser.as
+Objects/ChargeRocket.as

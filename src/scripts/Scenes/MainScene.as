@@ -340,6 +340,8 @@ package Scenes
          player2 = new Player(this,player.basex,player.basey);
          placePlayer2();
          p2DownShown = false;
+         Input.i.coopEnabled = true;
+         Input.i.p2Present = true;
          RewardText.createRewardText(this,400,300,"PLAYER 2 JOINED","TextLayer",Input.P2_COLOR,1,0,100);
       }
 
@@ -499,6 +501,21 @@ package Scenes
          p1DownTicks = 0;
       }
 
+      // Player 2 held START to leave: back to single player (a lone controller goes back to player 1).
+      public function removePlayer2() : void
+      {
+         if(!player2._removed)
+         {
+            player2.leaveGame();
+         }
+         player2 = null;
+         p2DownShown = false;
+         Input.i.coopEnabled = false;
+         Input.i.p2Present = false;
+         Input.i.p2Active = false;
+         RewardText.createRewardText(this,400,300,"PLAYER 2 LEFT - CO-OP OFF","TextLayer",Input.P2_COLOR,1,0,100);
+      }
+
       public function roomClearForRespawn() : Boolean
       {
          return countEnemies() == 0 && fading == 0 && !_setFinishSequence;
@@ -506,8 +523,14 @@ package Scenes
 
       public function updatePlayer2() : void
       {
+         var _loc4_:Number = NaN;
+         if(Input.i.p2LeaveHit() && player2)
+         {
+            removePlayer2();
+         }
          var _loc1_:Boolean = Boolean(player2) && !player2._removed;
          Input.i.p2Active = _loc1_;
+         Input.i.p2Present = player2 != null;
          if(player2 && player2._removed)
          {
             if(!p2DownShown)
@@ -544,13 +567,19 @@ package Scenes
          {
             p1DownShown = false;
          }
-         var _loc2_:Boolean = Input.i.hasP2Pad() && !player2 && !player._removed && !_setFinishSequence && !hasCommWindow();
+         var _loc2_:Boolean = Input.i.hasJoinPad() && !player2 && !player._removed && !_setFinishSequence && !hasCommWindow();
          if(Input.i.p2JoinHit() && _loc2_ && fading == 0)
          {
             spawnPlayer2();
             _loc2_ = false;
          }
-         var _loc3_:String = _loc2_ ? "P2: PRESS START TO JOIN" : "";
+         // With two controllers, remind player 2 how to join; with one, the controller just plays player 1.
+         var _loc3_:String = _loc2_ && Input.i.padCount() >= 2 ? "P2: HOLD START TO JOIN" : "";
+         _loc4_ = Input.i.holdProgress();
+         if(_loc4_ > 0.1 && (Input.i.holdAction() == "leave" ? Boolean(player2) : _loc2_))
+         {
+            _loc3_ = (Input.i.holdAction() == "leave" ? "HOLD START: LEAVING CO-OP IN " : "HOLD START: CO-OP IN ") + Math.ceil((1 - _loc4_) * Input.holdMs / 1000);
+         }
          if(_loc3_ != p2HintText)
          {
             p2HintText = _loc3_;
@@ -678,6 +707,8 @@ package Scenes
       override public function init() : void
       {
          player2 = null;
+         Input.i.coopEnabled = false;
+         Input.i.p2Present = false;
          player = new Player(this,400,300);
          newLevel();
          inventoryButton = new GameObject(this,SimpleButton,"TextLayer",0,0);

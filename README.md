@@ -11,22 +11,27 @@ Run **`Robokill 2 (Co-op).exe`**. It bundles the Adobe Flash Player 32 projector
 | Setup | Player 1 (yellow) | Player 2 (green) |
 |---|---|---|
 | No controller | Keyboard + mouse | — |
-| 1 controller | Keyboard + mouse | Controller |
+| 1 controller, solo (default) | Keyboard + mouse and/or the controller | — |
+| 1 controller, co-op | Keyboard + mouse | The controller |
 | 2 controllers | Keyboard + mouse and/or controller 1 | Controller 2 |
 
-In menus, any controller moves the cursor and **RT / A / LT** acts as a left click.
+**Starting co-op:** hold **START for 3 seconds** on the joining controller: the only controller, or controller 2. A countdown shows at the top of the screen. With one controller, it switches from Player 1 to Player 2, and Player 1 carries on with keyboard + mouse.
+
+**Leaving co-op:** Player 2 holds **START for 3 seconds**. With one controller, it goes back to controlling Player 1.
+
+A quick tap of START pauses. In menus, any controller moves the cursor and **RT / A / LT** acts as a left click.
 
 ### Player 2 controls
 
 | Button | Action |
 |---|---|
-| START (or A) | Join the game |
+| Hold START (3 s) | Join / leave co-op |
 | Left stick / D-pad | Move |
 | Right stick | Aim (green crosshair) |
 | RT / A / LT | Fire |
 | LB / X | Use active item 1 |
 | RB | Use active item 2 |
-| START | Pause |
+| Tap START | Pause |
 | Back | Map |
 | Y | Inventory |
 
@@ -52,6 +57,8 @@ Pulling, pushing or re-cloning the repo never uploads, overwrites or wipes anyon
 ## Build from source
 
 Requirements: Windows and Java 11+ on PATH.
+
+Some asset file names are long. If cloning fails with "Filename too long", run `git config --global core.longpaths true` or clone into a shorter folder.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build\build.ps1

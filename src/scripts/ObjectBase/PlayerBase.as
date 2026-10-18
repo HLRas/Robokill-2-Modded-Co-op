@@ -759,6 +759,34 @@ package ObjectBase
          }
       }
 
+      // Player 2 leaves co-op: disappear quietly, without the death explosion.
+      public function leaveGame() : void
+      {
+         var _loc1_:int = 0;
+         removeP2Hud();
+         if(lowHealth)
+         {
+            lowHealth.remove();
+         }
+         if(criticalHealth)
+         {
+            criticalHealth.remove();
+         }
+         if(riotShield)
+         {
+            riotShield.remove();
+         }
+         while(_loc1_ < 4)
+         {
+            if(weaponIcons[_loc1_])
+            {
+               weaponIcons[_loc1_].remove();
+            }
+            _loc1_++;
+         }
+         remove();
+      }
+
       public function removeP2Hud() : void
       {
          if(p2Bar)

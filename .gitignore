@@ -13,8 +13,8 @@ flashlog.txt
 mm.cfg
 
 # Build tools and output (build\build.ps1 downloads/creates these)
-tools/
-out/
+/tools/
+/out/
 
 # OS / editor clutter
 Thumbs.db

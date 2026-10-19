@@ -86,8 +86,16 @@ package Objects
          var _loc1_:Point = _loc14_.tformed(offsetX,offsetY);
          startx = _loc1_.x;
          starty = _loc1_.y;
-         endx = _loc14_.aimPointX() + (_loc1_.x - _loc14_.basex);
-         endy = _loc14_.aimPointY() + (_loc1_.y - _loc14_.basey);
+         if(_loc14_.usesPad())
+         {
+            endx = _loc14_.lockTargetX;
+            endy = _loc14_.lockTargetY;
+         }
+         else
+         {
+            endx = _loc14_.aimPointX() + (_loc1_.x - _loc14_.basex);
+            endy = _loc14_.aimPointY() + (_loc1_.y - _loc14_.basey);
+         }
          if(ticks < 15)
          {
             endx = Interpolation.linearInterpolateLock(startx,endx,ticks / 15);

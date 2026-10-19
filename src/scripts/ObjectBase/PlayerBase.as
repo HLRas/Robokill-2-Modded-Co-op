@@ -1,5 +1,6 @@
 package ObjectBase
 {
+   import Audio.GameSound;
    import Audio.GameSoundChannel;
    import GameObject.*;
    import GameScene.*;
@@ -19,7 +20,12 @@ package ObjectBase
    import Weapons.*;
    import flash.display.*;
    import flash.filters.ColorMatrixFilter;
+   import flash.events.SampleDataEvent;
+   import flash.geom.ColorTransform;
    import flash.geom.Point;
+   import flash.media.Sound;
+   import flash.media.SoundTransform;
+   import flash.utils.ByteArray;
    
    public class PlayerBase extends ActorBase
    {
@@ -67,6 +73,12 @@ package ObjectBase
       public var handleMouseX:Number = 0;
       
       public var handleMouseY:Number = 0;
+
+      public var lockTargetX:Number = 0;
+
+      public var lockTargetY:Number = 0;
+
+      public var lockedEnemy:EnemyBase;
       
       public var extradx:Number = 0;
       
@@ -137,6 +149,11 @@ package ObjectBase
       public var lastdy:Number = 0;
       
       public var oldWeapons:Array = new Array(4);
+
+      // Ticks each weapon slot has been fully charged (0 = not full), for the flash and bleep.
+      public var fullChargeTicks:Array = [0,0,0,0];
+
+      private static var bleepSamples:ByteArray;
       
       public var expSoundChannel:GameSoundChannel;
       
@@ -694,6 +711,186 @@ package ObjectBase
             return Boolean(Input.i.p2Pad.fire);
          }
          return Boolean(Input.i.mouseDown());
+      }
+
+      public function usesPad() : Boolean
+      {
+         return partner != null || Input.i.padMode;
+      }
+
+      // Weapons that hit at the aim point rather than firing along the aim line: lasers, the shredder,
+      // cluster grenades and charge rockets.
+      public static function isPointWeapon(param1:Object) : Boolean
+      {
+         return param1 is Laser || param1 is Shredder || param1 is ChargeLaser || param1 is ChargeGrenades || param1 is ChargeRockets;
+      }
+
+      // Where point weapons hit. With the mouse that is the cursor.
+      // A stick only gives a direction, so the shot locks onto the nearest enemy inside a cone along it,
+      // or hits at the normal crosshair when there is none.
+      public function updateLockTarget() : void
+      {
+         var _loc5_:GameObject = null;
+         var _loc6_:EnemyBase = null;
+         var _loc7_:Number = NaN;
+         var _loc8_:Number = NaN;
+         var _loc9_:Number = NaN;
+         var _loc10_:Number = NaN;
+         lockTargetX = handleMouseX;
+         lockTargetY = handleMouseY;
+         lockedEnemy = null;
+         if(!usesPad())
+         {
+            return;
+         }
+         var _loc1_:Number = handleMouseX - basex;
+         var _loc2_:Number = handleMouseY - basey;
+         var _loc3_:Number = Math.sqrt(_loc1_ * _loc1_ + _loc2_ * _loc2_);
+         if(_loc3_ < 0.001)
+         {
+            return;
+         }
+         _loc1_ /= _loc3_;
+         _loc2_ /= _loc3_;
+         var _loc4_:Number = Math.tan(Input.lockAngle * Math.PI / 180);
+         var _loc11_:Number = 0;
+         for each(_loc5_ in gs.objects)
+         {
+            if(isLockable(_loc5_))
+            {
+               _loc6_ = EnemyBase(_loc5_);
+               _loc7_ = _loc6_.basex - basex;
+               _loc8_ = _loc6_.basey - basey;
+               _loc9_ = _loc7_ * _loc1_ + _loc8_ * _loc2_;
+               _loc10_ = Math.abs(_loc7_ * _loc2_ - _loc8_ * _loc1_);
+               if(_loc9_ > 0 && _loc10_ < _loc9_ * _loc4_ + _loc6_.collisionWidth() / 2)
+               {
+                  if(lockedEnemy == null || _loc9_ < _loc11_)
+                  {
+                     lockedEnemy = _loc6_;
+                     _loc11_ = _loc9_;
+                  }
+               }
+            }
+         }
+         if(lockedEnemy)
+         {
+            lockTargetX = lockedEnemy.basex;
+            lockTargetY = lockedEnemy.basey;
+         }
+      }
+
+      // Real enemies only: the game also files crack tiles (critter spawn points) and thrown bombs as enemies.
+      public static function isLockable(param1:Object) : Boolean
+      {
+         return param1 is EnemyBase && !EnemyBase(param1)._killed && !(param1 is EnemyCrack) && !(param1 is BomberBomb) && !(param1 is BullBatBombObject);
+      }
+
+      // True when a point weapon is equipped and this player aims with a controller (shows the lock reticle).
+      public function hasLockWeapon() : Boolean
+      {
+         var _loc1_:int = 0;
+         if(!usesPad())
+         {
+            return false;
+         }
+         while(_loc1_ < weapons.length)
+         {
+            if(isPointWeapon(weapons[_loc1_]))
+            {
+               return true;
+            }
+            _loc1_++;
+         }
+         return false;
+      }
+
+      // A charge weapon that just hit full charge bleeps, flashes white, then keeps blinking until it is fired.
+      public function updateFullChargeFlash(param1:int, param2:Boolean) : void
+      {
+         var _loc3_:Number = 0;
+         if(!param2)
+         {
+            fullChargeTicks[param1] = 0;
+         }
+         else
+         {
+            if(fullChargeTicks[param1] == 0)
+            {
+               playBleep();
+            }
+            ++fullChargeTicks[param1];
+            if(fullChargeTicks[param1] <= 6)
+            {
+               _loc3_ = 255;
+            }
+            else if(fullChargeTicks[param1] % 8 < 4)
+            {
+               _loc3_ = 150;
+            }
+         }
+         if(!weaponIcons[param1])
+         {
+            return;
+         }
+         var _loc4_:DisplayObject = weaponIcons[param1].obj;
+         var _loc5_:ColorTransform = _loc4_.transform.colorTransform;
+         if(_loc5_.redOffset != _loc3_)
+         {
+            _loc5_.redOffset = _loc5_.greenOffset = _loc5_.blueOffset = _loc3_;
+            _loc4_.transform.colorTransform = _loc5_;
+         }
+      }
+
+      // A short rising two-tone bleep, synthesised once (the game has no fitting sound).
+      public static function playBleep() : void
+      {
+         var _loc1_:Sound = null;
+         var _loc2_:int = 0;
+         var _loc3_:Number = NaN;
+         var _loc4_:Number = NaN;
+         var _loc5_:Number = NaN;
+         if(GameSound.globalSoundVolume <= 0)
+         {
+            return;
+         }
+         if(!bleepSamples)
+         {
+            bleepSamples = new ByteArray();
+            while(_loc2_ < 6174)
+            {
+               _loc3_ = _loc2_ / 44100;
+               _loc4_ = 0;
+               if(_loc2_ < 2205)
+               {
+                  _loc4_ = Math.sin(2 * Math.PI * 1320 * _loc3_) * (1 - _loc2_ / 2205);
+               }
+               else if(_loc2_ >= 2646)
+               {
+                  _loc4_ = Math.sin(2 * Math.PI * 1980 * _loc3_) * (1 - (_loc2_ - 2646) / 3528);
+               }
+               // A little square wave on top gives it a retro edge.
+               _loc5_ = _loc4_ * 0.8 + (_loc4_ > 0 ? 0.2 : (_loc4_ < 0 ? -0.2 : 0)) * Math.abs(_loc4_);
+               bleepSamples.writeFloat(_loc5_);
+               bleepSamples.writeFloat(_loc5_);
+               _loc2_++;
+            }
+         }
+         var _loc6_:int = 0;
+         _loc1_ = new Sound();
+         _loc1_.addEventListener(SampleDataEvent.SAMPLE_DATA,function(param1:SampleDataEvent):void
+         {
+            var _loc2_:int = 0;
+            bleepSamples.position = _loc6_;
+            while(_loc2_ < 4096 && bleepSamples.bytesAvailable > 0)
+            {
+               param1.data.writeFloat(bleepSamples.readFloat());
+               param1.data.writeFloat(bleepSamples.readFloat());
+               _loc2_++;
+            }
+            _loc6_ = int(bleepSamples.position);
+         });
+         _loc1_.play(0,0,new SoundTransform(0.3 * GameSound.globalSoundVolume));
       }
 
       public static function hueMatrix(param1:Number) : Array
@@ -1410,7 +1607,14 @@ package ObjectBase
             ChargeLaser(param1).offsetX = _loc3_;
             ChargeLaser(param1).offsetY = _loc4_;
          }
-         param1.shoot(gs,_loc6_.x,_loc6_.y,handleMouseX + _loc7_.x,handleMouseY + _loc7_.y);
+         if(isPointWeapon(param1) && usesPad())
+         {
+            param1.shoot(gs,_loc6_.x,_loc6_.y,lockTargetX,lockTargetY);
+         }
+         else
+         {
+            param1.shoot(gs,_loc6_.x,_loc6_.y,handleMouseX + _loc7_.x,handleMouseY + _loc7_.y);
+         }
          var _loc8_:String = "Shoot";
          if(param1 is Laser)
          {
@@ -1990,6 +2194,11 @@ package ObjectBase
          shredderThisFrame = false;
          handleMouseX = aimPointX();
          handleMouseY = aimPointY();
+         updateLockTarget();
+         if(hasLockWeapon())
+         {
+            Input.i.setLockReticle(partner != null,lockTargetX,lockTargetY,lockedEnemy != null);
+         }
          var _loc1_:Boolean = true;
          if(distanceToPoint(handleMouseX,handleMouseY) < 32)
          {
@@ -2402,6 +2611,7 @@ package ObjectBase
                   _loc23_.baseAlpha *= Math.random() * 0.3 + 0.7;
                }
             }
+            updateFullChargeFlash(_loc8_,_loc22_ >= 1);
             if(weaponIcons[_loc8_])
             {
                _loc24_ = tformed(offsetsX[_loc8_],offsetsY[_loc8_] - weaponIcons[_loc8_].baseHeight / 2);

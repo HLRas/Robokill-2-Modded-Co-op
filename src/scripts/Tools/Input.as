@@ -69,6 +69,9 @@ package Tools
 
       public static var cursorSpeed:Number = 12;
 
+      // Controller lock-on for point weapons (lasers, shredder, cluster grenades, charge rockets): half-angle of the aim cone (degrees).
+      public static var lockAngle:Number = 20;
+
       public static const DEBUG_KEY:int = 120;
 
       public static const P2_COLOR:uint = 0x4CFF4C;
@@ -187,6 +190,14 @@ package Tools
 
       private var p2Cursor:Sprite;
 
+      private var lockReticle:Sprite;
+
+      private var p2LockReticle:Sprite;
+
+      private var lockFrame:int = -100;
+
+      private var p2LockFrame:int = -100;
+
       private var debugText:TextField;
 
       public function Input(param1:DisplayObject)
@@ -222,6 +233,28 @@ package Tools
          p2AimX = param1;
          p2AimY = param2;
          p2Frame = frame;
+      }
+
+      // Called each frame by a player holding a point weapon on a controller, for the faint lock reticle.
+      public function setLockReticle(param1:Boolean, param2:Number, param3:Number, param4:Boolean) : void
+      {
+         if(!lockReticle)
+         {
+            return;
+         }
+         var _loc5_:Sprite = param1 ? p2LockReticle : lockReticle;
+         _loc5_.x = param2;
+         _loc5_.y = param3;
+         // Brighter when locked onto an enemy than when just marking the landing spot.
+         _loc5_.alpha = param4 ? 0.85 : 0.4;
+         if(param1)
+         {
+            p2LockFrame = frame;
+         }
+         else
+         {
+            lockFrame = frame;
+         }
       }
 
       public function inGameplay() : Boolean
@@ -897,6 +930,27 @@ package Tools
          return s;
       }
 
+      // Corner brackets, so it reads differently from the aim cursor.
+      private function makeLockReticle(param1:uint) : Sprite
+      {
+         var s:Sprite = new Sprite();
+         s.mouseEnabled = false;
+         s.mouseChildren = false;
+         var c:Array = [[-1,-1],[1,-1],[1,1],[-1,1]];
+         var k:int = 0;
+         while(k < 4)
+         {
+            s.graphics.lineStyle(2,param1,1);
+            s.graphics.moveTo(c[k][0] * 16,c[k][1] * 9);
+            s.graphics.lineTo(c[k][0] * 16,c[k][1] * 16);
+            s.graphics.lineTo(c[k][0] * 9,c[k][1] * 16);
+            k++;
+         }
+         s.visible = false;
+         stage.addChild(s);
+         return s;
+      }
+
       private function bringToFront(param1:DisplayObject) : void
       {
          if(stage.getChildIndex(param1) != stage.numChildren - 1)
@@ -915,6 +969,18 @@ package Tools
          {
             cursor = makeCursor(0xFFFFFF);
             p2Cursor = makeCursor(P2_COLOR);
+            lockReticle = makeLockReticle(0xFFFFFF);
+            p2LockReticle = makeLockReticle(P2_COLOR);
+         }
+         lockReticle.visible = frame - lockFrame <= 2;
+         if(lockReticle.visible)
+         {
+            bringToFront(lockReticle);
+         }
+         p2LockReticle.visible = frame - p2LockFrame <= 2;
+         if(p2LockReticle.visible)
+         {
+            bringToFront(p2LockReticle);
          }
          cursor.visible = padMode;
          if(padMode)

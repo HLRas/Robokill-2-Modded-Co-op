@@ -37,6 +37,12 @@ A quick tap of START pauses. In menus, any controller moves the cursor and **RT 
 
 Press **F9** in-game to see raw controller values, which helps if buttons are mapped wrong on your controller.
 
+### Extras
+
+- **Controller lock-on for point weapons:** the Laser, Shredder, Charge Laser, Cluster Grenades and Charge Rockets hit at the aim point rather than along the aim line. On a controller (either player), a faint bracket reticle shows where they will hit while one is equipped. It locks onto the nearest enemy within about 20° of where you're aiming and turns brighter when locked. Crack tiles and thrown bombs are ignored. With no enemy in that cone, shots hit at the normal crosshair. Mouse aiming works as before.
+- **Full-charge indicator:** when a charge weapon is fully charged, it bleeps and flashes white, then keeps blinking until you fire.
+- **Cheat code:** on the *Select a Mission* screen, press **↑ ↓ ← → ↑ ↑ ↓ ←** on the keyboard. It unlocks all 12 missions, raises the player to level 50 (if lower) and adds $1,000,000, for the selected save only. A sound plays when it works.
+
 ### Co-op rules
 
 - Cash, XP, level, keys, inventory and the weapon loadout are shared. Each player has their own shields.
@@ -79,7 +85,7 @@ Notes:
 | `src/` | Decompiled game: ActionScript in `scripts/`, plus images, sounds and fonts |
 | `build/` | Build script and the list of modified classes |
 
-Main mod code: `src/scripts/Tools/Input.as` (controllers), `src/scripts/ObjectBase/PlayerBase.as` (player 2), `src/scripts/Scenes/MainScene.as` (co-op logic: join, respawn, targeting).
+Main mod code: `src/scripts/Tools/Input.as` (controllers, crosshairs), `src/scripts/ObjectBase/PlayerBase.as` (player 2, lock-on, full-charge indicator), `src/scripts/Scenes/MainScene.as` (co-op logic: join, respawn, targeting), `src/scripts/Scenes/MainMenu.as` (cheat code).
 
 ## Credits
 

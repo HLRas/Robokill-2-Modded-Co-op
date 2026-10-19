@@ -46,6 +46,13 @@ package Scenes
       public var unlockAllEpisodes:Boolean = false;
       
       public var globalMenuY:Number = 350;
+
+      // Up, down, left, right, up, up, down, left on the mission select screen.
+      public static const CHEAT_CODE:Array = [38,40,37,39,38,38,40,37];
+
+      public static const CHEAT_LEVEL:int = 49;
+
+      public var cheatProgress:int = 0;
       
       public var profileToDeleteName:String = "";
       
@@ -512,6 +519,7 @@ package Scenes
                }
             }
          }
+         updateCheat();
          if(layer.buttonHit("CREDITS"))
          {
             layer.push(credits);
@@ -609,6 +617,52 @@ package Scenes
          }
       }
       
+      // The mission select screen is only reachable with a save selected, so the cheat only changes that save.
+      public function updateCheat() : void
+      {
+         var _loc1_:int = -1;
+         var _loc2_:int = 37;
+         while(_loc2_ <= 40)
+         {
+            if(Input.i.keyHit(_loc2_))
+            {
+               _loc1_ = _loc2_;
+            }
+            _loc2_++;
+         }
+         if(layer.getButton("MISSION 1") == null)
+         {
+            cheatProgress = 0;
+            return;
+         }
+         if(_loc1_ < 0)
+         {
+            return;
+         }
+         if(_loc1_ == CHEAT_CODE[cheatProgress])
+         {
+            ++cheatProgress;
+         }
+         else
+         {
+            cheatProgress = _loc1_ == CHEAT_CODE[0] ? 1 : 0;
+         }
+         if(cheatProgress == CHEAT_CODE.length)
+         {
+            cheatProgress = 0;
+            Profile.current.store("currentmission",11);
+            Profile.current.store("cash",int(Profile.current.lookup("cash")) + 1000000);
+            // The game has no level cap; the best gear needs level 44. Stored levels are shown +1, so this is level 50.
+            if(int(Profile.current.lookup("level")) < CHEAT_LEVEL)
+            {
+               Profile.current.store("level",CHEAT_LEVEL);
+               Profile.current.store("experience",0);
+            }
+            Sounds.doorUnlock.play();
+            layer.push(startButtons,true);
+         }
+      }
+
       public function deleteAreYouSure() : Array
       {
          var _loc1_:Array = new Array();

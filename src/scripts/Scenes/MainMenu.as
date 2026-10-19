@@ -53,6 +53,12 @@ package Scenes
       public static const CHEAT_LEVEL:int = 49;
 
       public var cheatProgress:int = 0;
+
+      public var joinInput:GameObject;
+
+      public var joinStatus:GameObject;
+
+      public var joinStatusShown:String = "";
       
       public var profileToDeleteName:String = "";
       
@@ -178,6 +184,36 @@ package Scenes
          return _loc4_;
       }
       
+      // Online co-op: type the host's join code (shown in the host's pause menu).
+      public function joinOnline() : Array
+      {
+         var title:GameObject = new GameObject(this,null,"TextLayer",0,0);
+         title.setText("ENTER THE HOST'S JOIN CODE:",-1,16755200);
+         var input:GameObject = new GameObject(this,null,"TextLayer",0,0);
+         input.setText(" ",-1,16755200);
+         input.setupTextInput(8);
+         TextField(input.obj).text = "";
+         TextField(input.obj).restrict = "A-Za-z0-9";
+         input.obj.width = 300;
+         input.obj.height = 45;
+         input.basex -= 150;
+         var connectButton:GameObject = addButton("CONNECT");
+         var back:GameObject = addButton("BACK");
+         joinStatusShown = joinStatusLine();
+         var st:GameObject = createNormalText(this,joinStatusShown,16);
+         var all:Array = [title,input,connectButton,back,st];
+         vert([vert([title,input],0),connectButton,back,st],20,400,300);
+         joinInput = input;
+         joinStatus = st;
+         LayerFilter.applySlideIn(all,1,0,-600);
+         return all;
+      }
+
+      public function joinStatusLine() : String
+      {
+         return Net.mode != 1 && Net.status.length > 0 ? Net.status : "THE HOST SEES THE CODE IN THEIR PAUSE MENU";
+      }
+
       public function flushhelp() : Array
       {
          var _loc1_:GameObject = new GameObject(this,Embeds.settings_panel_png,"TextLayer",400,300);
@@ -227,6 +263,7 @@ package Scenes
       {
          var _loc1_:Array = new Array();
          _loc1_.push(addButton("START"));
+         _loc1_.push(addButton("JOIN ONLINE"));
          _loc1_.push(addButton("OPTIONS"));
          _loc1_.push(addButton("CREDITS"));
          vert(_loc1_,8,400,300);
@@ -520,6 +557,35 @@ package Scenes
             }
          }
          updateCheat();
+         if(joinInput && !joinInput._removed)
+         {
+            if(Boolean(Input.i.keyHit(13)) || layer.buttonHit("CONNECT"))
+            {
+               Net.join(TextField(joinInput.obj).text);
+            }
+            if(joinStatusShown != joinStatusLine())
+            {
+               joinStatusShown = joinStatusLine();
+               joinStatus.setText(joinStatusShown);
+            }
+         }
+         if(layer.buttonHit("JOIN ONLINE"))
+         {
+            layer.push(joinOnline);
+         }
+         // For testing online play: online.txt "autostart=1" jumps straight into mission 1 on the first save.
+         if(Ticks == 60 && Net.config["autostart"])
+         {
+            Profile.getProfile(0).setCurrent();
+            if(String(Profile.current.lookup("name")) == "null")
+            {
+               Profile.current.store("name","TEST");
+            }
+            _loc4_ = new MainScene();
+            _loc4_.currentEpisode = 0;
+            pushScene(_loc4_,true);
+            return;
+         }
          if(layer.buttonHit("CREDITS"))
          {
             layer.push(credits);

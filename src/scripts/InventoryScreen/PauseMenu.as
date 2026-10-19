@@ -5,6 +5,7 @@ package InventoryScreen
    import Layout.LayerFilter;
    import Scenes.MainMenu;
    import Tools.GraphicsTools;
+   import Tools.Net;
    
    public class PauseMenu extends HUDDisplay
    {
@@ -14,6 +15,11 @@ package InventoryScreen
       public var pText:GameObject;
       
       public var quit:GameObject;
+
+      // Online co-op status: pausing starts hosting and shows the join code.
+      public var netText:GameObject;
+
+      public var netShown:String = "";
       
       public function PauseMenu(param1:GameScene)
       {
@@ -24,6 +30,7 @@ package InventoryScreen
       {
          LayerFilter.reverse(quit);
          LayerFilter.reverse(pText);
+         LayerFilter.reverse(netText);
          super._kill();
       }
       
@@ -39,6 +46,11 @@ package InventoryScreen
       
       override public function _update() : void
       {
+         if(netShown != onlineLine())
+         {
+            netShown = onlineLine();
+            netText.setText(netShown);
+         }
          if(!hasQuit)
          {
             if(quit.mHit())
@@ -62,8 +74,18 @@ package InventoryScreen
          pText.basex = 400;
          pText.basey = 240;
          pText.updateDespitePaused = true;
-         param1.vert([pText,quit,ok],16,400,300);
+         Net.startHosting();
+         netShown = onlineLine();
+         netText = MainMenu.createNormalText(param1,netShown,20);
+         netText.updateDespitePaused = true;
+         param1.vert([pText,quit,ok,netText],16,400,300);
          slide(pText);
+         slide(netText);
+      }
+
+      public function onlineLine() : String
+      {
+         return "ONLINE: " + (Net.status.length > 0 ? Net.status : "OFFLINE");
       }
    }
 }

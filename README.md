@@ -50,6 +50,18 @@ Press **F9** in-game to see raw controller values, which helps if buttons are ma
 - If one player dies, the other keeps going. The downed player respawns next to their partner once the room is cleared, with no button press or penalty.
 - If both die, it works like single player: you lose a little cash, the enemy reclaims rooms, and you restart from the checkpoint.
 
+## Online co-op
+
+A friend can join over the internet as Player 2.
+
+- **Host:** start a mission and pause. The pause menu shows **ONLINE: JOIN CODE: XXXXXX**. Give your friend the code.
+- **Friend:** on the title screen choose **JOIN ONLINE**, type the code and press **CONNECT**. They see your game and play Player 2 with their controller, or the keyboard: **WASD** move, **arrow keys** aim and fire, **Space / Shift** items, **I** inventory, **M** map, **P** pause, **Enter** to click in menus.
+- **Leaving:** the friend presses **ESC** (or holds **BACK** for 3 seconds). If they reconnect with the same code, they spawn again.
+
+**Setup:** both players need the same server line in `online.txt` next to the exe (`relay=<ip>:7777`). The server is a small free relay; [relay/README.md](relay/README.md) shows how to run one for free on Oracle Cloud in Johannesburg.
+
+How it works: the host's game does everything. Your friend's copy runs no game logic: it shows a live copy of the host's screen (pictures are sent once, then only their positions each frame) and sends its controller back. That needs about 0.2–1.5 Mbit/s from the host. Both players must run the same version of the exe.
+
 ## Save games
 
 Saves are **not** stored in this folder. Flash keeps them per Windows user in:
@@ -84,8 +96,10 @@ Notes:
 | `original/Robokill2.swf` | Unmodified game, used as the base for builds |
 | `src/` | Decompiled game: ActionScript in `scripts/`, plus images, sounds and fonts |
 | `build/` | Build script and the list of modified classes |
+| `relay/` | Online co-op relay server and setup guide |
+| `online.txt` | Which relay server online co-op uses |
 
-Main mod code: `src/scripts/Tools/Input.as` (controllers, crosshairs), `src/scripts/ObjectBase/PlayerBase.as` (player 2, lock-on, full-charge indicator), `src/scripts/Scenes/MainScene.as` (co-op logic: join, respawn, targeting), `src/scripts/Scenes/MainMenu.as` (cheat code).
+Main mod code: `src/scripts/Tools/Input.as` (controllers, crosshairs), `src/scripts/ObjectBase/PlayerBase.as` (player 2, lock-on, full-charge indicator), `src/scripts/Scenes/MainScene.as` (co-op logic: join, respawn, targeting), `src/scripts/Scenes/MainMenu.as` (cheat code, join screen), `src/scripts/Tools/Net.as` (online co-op).
 
 ## Credits
 

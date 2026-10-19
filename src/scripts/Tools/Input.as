@@ -170,6 +170,11 @@ package Tools
 
       private var frame:int = 0;
 
+      // Index of the online guest's pad in this frame's controller list (-1 = none).
+      private var remoteIndex:int = -1;
+
+      private var lastLocalValues:Object;
+
       private var aimFrame:int = -100;
 
       private var p2Frame:int = -100;
@@ -215,6 +220,7 @@ package Tools
          param1.addEventListener(FocusEvent.MOUSE_FOCUS_CHANGE,focusOutHandler);
          i = this;
          stage = param1 as Stage;
+         Net.init(stage);
          initGamepad();
          param1.addEventListener(Event.ENTER_FRAME,pollGamepad);
       }
@@ -260,6 +266,12 @@ package Tools
       public function inGameplay() : Boolean
       {
          return frame - aimFrame <= 2 || frame - p2Frame <= 2;
+      }
+
+      // This machine's controllers merged into one set of control values (null = none), for an online guest.
+      public function localPadValues() : Object
+      {
+         return lastLocalValues;
       }
 
       public function hasP2Pad() : Boolean
@@ -424,6 +436,10 @@ package Tools
 
       public function mouseDownHandler(param1:MouseEvent) : void
       {
+         if(Net.isMirroring())
+         {
+            return;
+         }
          mouseStatus = 1;
          mouseButtonHit = 1;
       }
@@ -435,6 +451,10 @@ package Tools
 
       public function keyDownHandler(param1:KeyboardEvent) : void
       {
+         if(Net.isMirroring())
+         {
+            return;
+         }
          if(keyStatus[param1.keyCode] != true)
          {
             keysHit[param1.keyCode] = true;
@@ -744,7 +764,7 @@ package Tools
                }
                if(startTracking[d] && down && !startConsumed[d] && now - startDownAt[d] >= holdMs)
                {
-                  if(d == p2Index && p2Present)
+                  if(d == p2Index && p2Present && d != remoteIndex)
                   {
                      startConsumed[d] = true;
                      p2LeaveRequest = true;
@@ -785,6 +805,20 @@ package Tools
                all.push(dv);
             }
          }
+         lastLocalValues = all.length > 0 ? mergeValues(all) : null;
+         // An online guest's own game ignores its controllers; their input goes to the host instead (see Net).
+         if(Net.isMirroring())
+         {
+            all = new Array();
+            pads = new Array();
+         }
+         // An online guest's controller is an extra pad that always plays player 2.
+         remoteIndex = -1;
+         if(Net.remotePad)
+         {
+            remoteIndex = all.length;
+            all.push(Net.remotePad);
+         }
          var n:int = int(all.length);
          if(n >= 2)
          {
@@ -801,6 +835,12 @@ package Tools
             p1Index = p2Index = -1;
          }
          joinIndex = n >= 2 ? 1 : (n == 1 && !coopEnabled ? 0 : -1);
+         if(remoteIndex >= 0)
+         {
+            p1Index = remoteIndex > 0 ? 0 : -1;
+            p2Index = remoteIndex;
+            joinIndex = remoteIndex;
+         }
          updatePad(p1Pad,p1Index >= 0 ? all[p1Index] : null);
          updatePad(p2Pad,p2Index >= 0 ? all[p2Index] : null);
          updatePad(menuPad,n >= 1 ? mergeValues(all) : null);
@@ -963,6 +1003,14 @@ package Tools
       {
          if(!stage)
          {
+            return;
+         }
+         if(Net.isMirroring())
+         {
+            if(cursor)
+            {
+               cursor.visible = p2Cursor.visible = lockReticle.visible = p2LockReticle.visible = false;
+            }
             return;
          }
          if(!cursor)

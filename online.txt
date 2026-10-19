@@ -1,0 +1,2 @@
+# Online co-op server. Both players need the same line; see relay/README.md to set one up.
+# relay=123.45.67.89:7777

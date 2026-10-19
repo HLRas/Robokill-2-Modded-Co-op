@@ -524,7 +524,7 @@ package Scenes
       public function updatePlayer2() : void
       {
          var _loc4_:Number = NaN;
-         if(Input.i.p2LeaveHit() && player2)
+         if((Input.i.p2LeaveHit() || Net.takeGuestLeft()) && player2)
          {
             removePlayer2();
          }
@@ -568,7 +568,7 @@ package Scenes
             p1DownShown = false;
          }
          var _loc2_:Boolean = Input.i.hasJoinPad() && !player2 && !player._removed && !_setFinishSequence && !hasCommWindow();
-         if(Input.i.p2JoinHit() && _loc2_ && fading == 0)
+         if((Input.i.p2JoinHit() || Net.guestWaiting()) && _loc2_ && fading == 0)
          {
             spawnPlayer2();
             _loc2_ = false;

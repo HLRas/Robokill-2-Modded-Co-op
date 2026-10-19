@@ -8,3 +8,5 @@ Objects/ChargeLaserBullet.as
 Weapons/ChargeLaser.as
 Objects/ChargeRocket.as
 Scenes/MainMenu.as
+Tools/Net.as
+InventoryScreen/PauseMenu.as

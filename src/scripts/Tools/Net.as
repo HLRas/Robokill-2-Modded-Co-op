@@ -59,8 +59,8 @@ package Tools
       // Bump when the protocol or anything the guest depends on changes; the relay refuses mismatched versions.
       public static const VERSION:String = "rk2-online-1";
 
-      // The relay, set by a line "relay=host:port" in online.txt next to the exe.
-      public static var relayHost:String = "";
+      // The relay (Oracle Cloud, Johannesburg). A line "relay=host:port" in online.txt next to the exe overrides it.
+      public static var relayHost:String = "84.12.82.74";
 
       public static var relayPort:int = 7777;
 

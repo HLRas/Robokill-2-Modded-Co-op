@@ -58,7 +58,7 @@ A friend can join over the internet as Player 2.
 - **Friend:** on the title screen choose **JOIN ONLINE**, type the code and press **CONNECT**. They see your game and play Player 2 with their controller, or the keyboard: **WASD** move, **arrow keys** aim and fire, **Space / Shift** items, **I** inventory, **M** map, **P** pause, **Enter** to click in menus.
 - **Leaving:** the friend presses **ESC** (or holds **BACK** for 3 seconds). If they reconnect with the same code, they spawn again.
 
-**Setup:** both players need the same server line in `online.txt` next to the exe (`relay=<ip>:7777`). The server is a small free relay; [relay/README.md](relay/README.md) shows how to run one for free on Oracle Cloud in Johannesburg.
+**Setup:** nothing. The exe connects to a built-in server, a small free relay on Oracle Cloud in Johannesburg. To run your own, see [relay/README.md](relay/README.md) and set `relay=<ip>:7777` in `online.txt` next to the exe (both players).
 
 How it works: the host's game does everything. Your friend's copy runs no game logic: it shows a live copy of the host's screen (pictures are sent once, then only their positions each frame) and sends its controller back. That needs about 0.2–1.5 Mbit/s from the host. Both players must run the same version of the exe.
 

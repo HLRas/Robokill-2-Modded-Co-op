@@ -1,2 +1,3 @@
-# Online co-op server. Both players need the same line; see relay/README.md to set one up.
-# relay=123.45.67.89:7777
+# Online co-op server. The game uses the built-in server (84.12.82.74:7777, Johannesburg) unless a line below
+# picks another one. Both players need the same server; see relay/README.md to run your own.
+# relay=84.12.82.74:7777

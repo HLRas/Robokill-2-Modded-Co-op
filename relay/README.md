@@ -22,14 +22,14 @@ Oracle's Always Free tier includes small VMs that don't expire, and it has a Joh
    ```sh
    sudo mkdir -p /opt/rk2-relay && sudo mv relay.py /opt/rk2-relay/
    sudo mv rk2-relay.service /etc/systemd/system/
-   # Oracle's Ubuntu images also block ports in iptables:
-   sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 7777 -j ACCEPT
+   # Oracle's Ubuntu images also block ports in iptables (the rule must go above their REJECT rule):
+   sudo iptables -I INPUT 1 -m state --state NEW -p tcp --dport 7777 -j ACCEPT
    sudo netfilter-persistent save
    sudo systemctl daemon-reload
    sudo systemctl enable --now rk2-relay
    systemctl status rk2-relay      # should say "active (running)"
    ```
-5. **Point the game at it:** in `online.txt` next to the exe, set `relay=<IP>:7777`. Both players need this.
+5. **Point the game at it:** the exe has a built-in server address (`relayHost` in `src/scripts/Tools/Net.as`). To use your own, set `relay=<IP>:7777` in `online.txt` next to the exe; both players need the same one.
 
 Logs: `journalctl -u rk2-relay -f`. Add `--stats` to `ExecStart` to log each game's data rate.
 

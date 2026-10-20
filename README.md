@@ -6,6 +6,8 @@ Two-player local co-op and controller support for the Flash game *Robokill 2: Le
 
 Run **`Robokill 2 (Co-op).exe`**. It bundles the Adobe Flash Player 32 projector, so nothing needs to be installed.
 
+The title screen shows the mod version (**CO-OP MOD V1.0**, then V1.01, V1.02, … with each update). Online play needs the same version on both PCs.
+
 ### Who controls what
 
 | Setup | Player 1 (yellow) | Player 2 (green) |
@@ -19,7 +21,7 @@ Run **`Robokill 2 (Co-op).exe`**. It bundles the Adobe Flash Player 32 projector
 
 **Leaving co-op:** Player 2 holds **START for 3 seconds**. With one controller, it goes back to controlling Player 1.
 
-A quick tap of START pauses. In menus, any controller moves the cursor and **RT / A / LT** acts as a left click.
+A quick tap of START pauses. In menus, any controller moves the cursor and **RT / A / LT** acts as a left click. The same goes while a comms message is on screen, so you can press its **SKIP** button.
 
 ### Player 2 controls
 
@@ -60,7 +62,9 @@ A friend can join over the internet as Player 2.
 
 **Setup:** nothing. The exe connects to a built-in server, a small free relay on Oracle Cloud in Johannesburg. To run your own, see [relay/README.md](relay/README.md) and set `relay=<ip>:7777` in `online.txt` next to the exe (both players).
 
-How it works: the host's game does everything. Your friend's copy runs no game logic: it shows a live copy of the host's screen (pictures are sent once, then only their positions each frame) and sends its controller back. That needs about 0.2–1.5 Mbit/s from the host. Both players must run the same version of the exe.
+How it works: the host's game does everything. Your friend's copy runs no game logic: it shows a live copy of the host's screen and sends its controller back. Pictures the friend's copy already has are sent by name, text as text, and each frame only says what moved; the friend's copy plays frames a little behind (as little as the connection's jitter allows) and blends movement between them at 60 fps, so it stays smooth. That needs about 10–40 KB/s from the host, with short bursts on new rooms. Both players must run the same version of the exe.
+
+Press **F8** on either side for live stats (upload/download, jitter, playback delay).
 
 ## Save games
 

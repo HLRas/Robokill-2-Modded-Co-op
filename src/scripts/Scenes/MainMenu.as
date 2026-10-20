@@ -50,6 +50,10 @@ package Scenes
       // Up, down, left, right, up, up, down, left on the mission select screen.
       public static const CHEAT_CODE:Array = [38,40,37,39,38,38,40,37];
 
+      // The mod's version, shown on the title screen (PremiumContentNotifier). Goes up by 0.01 with each update.
+      // Online play only connects players with the same version.
+      public static const MOD_VERSION:String = "1.0";
+
       public static const CHEAT_LEVEL:int = 49;
 
       public var cheatProgress:int = 0;

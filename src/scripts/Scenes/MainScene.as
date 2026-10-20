@@ -2456,6 +2456,10 @@ package Scenes
             }
          }
          updatePlayer2();
+         if(hasCommWindow())
+         {
+            Input.i.setDialogOpen();
+         }
          Input.i.keyHit(73);
          Input.i.keyHit(77);
          Input.i.keyHit(85);

@@ -2,8 +2,11 @@ package Tools
 {
    import Audio.GameSound;
    import Audio.GameSoundChannel;
+   import Scenes.MainMenu;
    import flash.display.Bitmap;
    import flash.display.BitmapData;
+   import flash.display.JPEGEncoderOptions;
+   import flash.display.Loader;
    import flash.display.BlendMode;
    import flash.display.DisplayObject;
    import flash.display.DisplayObjectContainer;
@@ -25,6 +28,7 @@ package Tools
    import flash.filters.GlowFilter;
    import flash.geom.ColorTransform;
    import flash.geom.Matrix;
+   import flash.geom.Point;
    import flash.geom.Rectangle;
    import flash.media.Sound;
    import flash.media.SoundChannel;
@@ -41,6 +45,7 @@ package Tools
    import flash.text.TextFormat;
    import flash.utils.ByteArray;
    import flash.utils.Dictionary;
+   import flash.utils.describeType;
    import flash.utils.getDefinitionByName;
    import flash.utils.getQualifiedClassName;
    import flash.utils.getTimer;
@@ -56,8 +61,8 @@ package Tools
       // channel. Both sides connect out to relay/relay.py, which pairs them by a join code, because Flash cannot
       // accept incoming connections.
 
-      // Bump when the protocol or anything the guest depends on changes; the relay refuses mismatched versions.
-      public static const VERSION:String = "rk2-online-1";
+      // The relay only pairs players with the same value, i.e. the same mod version.
+      public static const VERSION:String = "rk2-online-" + MainMenu.MOD_VERSION;
 
       // The relay (Oracle Cloud, Johannesburg). A line "relay=host:port" in online.txt next to the exe overrides it.
       public static var relayHost:String = "84.12.82.74";
@@ -109,6 +114,12 @@ package Tools
 
       private static const D_PAD:int = 6;
 
+      private static const D_IMAGEREF:int = 7;
+
+      private static const D_TEXT:int = 8;
+
+      private static const D_JPEG:int = 9;
+
       private static const BLENDS:Array = [BlendMode.NORMAL,BlendMode.ADD,BlendMode.MULTIPLY,BlendMode.SCREEN,BlendMode.LIGHTEN,BlendMode.DARKEN,BlendMode.OVERLAY,BlendMode.HARDLIGHT,BlendMode.DIFFERENCE,BlendMode.SUBTRACT,BlendMode.INVERT,BlendMode.ALPHA,BlendMode.ERASE];
 
       // Controller values the guest sends, in order (each as a signed byte).
@@ -155,6 +166,39 @@ package Tools
 
       private static var rootFix:Matrix;
 
+      // Each display object gets an id, and frames only send what changed since the last frame.
+      private static var objIds:Dictionary = new Dictionary(true);
+
+      private static var nextObj:int = 1;
+
+      private static var lastSent:Object = {};
+
+      private static var frameSeq:int = 0;
+
+      // The game's shared pictures (Embeds' static BitmapData) by name, and each embedded picture class's original
+      // pixels: pictures the guest's copy of the game already has are sent by name instead of pixels.
+      private static var staticNames:Dictionary;
+
+      private static var classOriginals:Object = {};
+
+      // Text pictures: their text and layout, sent instead of pixels.
+      private static var textDescs:Dictionary = new Dictionary(true);
+
+      // ---- stats (F8) ----
+      private static var statsOn:Boolean = false;
+
+      private static var statsText:TextField;
+
+      private static var statsAt:int = 0;
+
+      private static var bytesOut:int = 0;
+
+      private static var bytesIn:int = 0;
+
+      private static var framesIn:int = 0;
+
+      private static var captureMs:Number = 0;
+
       // ---- guest state ----
       private static var view:Sprite;
 
@@ -182,6 +226,32 @@ package Tools
 
       private static var savedMute:Array;
 
+      // Decoded object states, and buffered frames waiting to be shown.
+      private static var gstate:Object = {};
+
+      private static var snaps:Array = [];
+
+      private static var sharedIds:Object = {};
+
+      private static var pendingJpeg:Object = {};
+
+      private static var guestClassCache:Object = {};
+
+      // Frame pacing: arrival samples [guest time, guest time - host time], and the playback delay behind the host.
+      private static var arrivals:Array = [];
+
+      private static var clockBase:Number = 0;
+
+      private static var jitter:Number = 0;
+
+      private static var bufferMs:Number = 60;
+
+      private static var tmpMatrix:Matrix = new Matrix();
+
+      private static var lastPadBytes:String = "";
+
+      private static var lastPadSent:int = 0;
+
       public function Net()
       {
          super();
@@ -198,6 +268,10 @@ package Tools
          stage.addEventListener(KeyboardEvent.KEY_DOWN,function(param1:KeyboardEvent):void
          {
             keys[param1.keyCode] = true;
+            if(param1.keyCode == 119)
+            {
+               statsOn = !statsOn;
+            }
             if(param1.keyCode == 27 && isMirroring())
             {
                disconnect();
@@ -434,6 +508,7 @@ package Tools
          try
          {
             sock.writeUnsignedInt(1 + (param2 ? param2.length : 0));
+            bytesOut += 5 + (param2 ? param2.length : 0);
             sock.writeByte(param1);
             if(param2 && param2.length > 0)
             {
@@ -479,6 +554,7 @@ package Tools
          var rest:ByteArray = null;
          if(s.bytesAvailable > 0)
          {
+            bytesIn += s.bytesAvailable;
             s.readBytes(inBuf,inBuf.length,s.bytesAvailable);
          }
          var pos:int = 0;
@@ -594,12 +670,10 @@ package Tools
          }
          if(mode == 2 && peer)
          {
-            if(frameNo % 2 == 0)
-            {
-               sendPad();
-            }
+            sendPad();
             updateGuestView();
          }
+         updateStats();
          flush();
       }
 
@@ -618,10 +692,45 @@ package Tools
          nextSound = 1;
          chanIds = new Dictionary(true);
          nextChan = 1;
+         objIds = new Dictionary(true);
+         nextObj = 1;
+         lastSent = {};
+         if(!staticNames)
+         {
+            buildStaticNames();
+         }
+      }
+
+      private static function buildStaticNames() : void
+      {
+         var v:XML = null;
+         var bd:BitmapData = null;
+         staticNames = new Dictionary();
+         try
+         {
+            var E:Class = getDefinitionByName("GlobalSetup.Embeds") as Class;
+            var x:XML = describeType(E);
+            for each(v in x.variable)
+            {
+               if(String(v.@type) == "flash.display::BitmapData")
+               {
+                  bd = E[String(v.@name)] as BitmapData;
+                  if(bd)
+                  {
+                     staticNames[bd] = String(v.@name);
+                  }
+               }
+            }
+         }
+         catch(e:Error)
+         {
+         }
       }
 
       private static function captureFrame() : void
       {
+         var t0:int = getTimer();
+         ++frameSeq;
          frameBody = new ByteArray();
          frameCount = 0;
          rootFix = null;
@@ -641,7 +750,8 @@ package Tools
          }
          walk(stage,null,BlendMode.NORMAL);
          var out:ByteArray = new ByteArray();
-         out.writeShort(frameCount);
+         out.writeUnsignedInt(t0);
+         writeVar(out,frameCount);
          out.writeBytes(frameBody);
          writeChannels(out);
          out.compress();
@@ -650,6 +760,33 @@ package Tools
          {
             sweep();
          }
+         captureMs += (getTimer() - t0 - captureMs) * 0.1;
+      }
+
+      private static function writeVar(param1:ByteArray, param2:uint) : void
+      {
+         while(param2 >= 128)
+         {
+            param1.writeByte(param2 & 127 | 128);
+            param2 >>>= 7;
+         }
+         param1.writeByte(param2);
+      }
+
+      private static function readVar(param1:ByteArray) : uint
+      {
+         var v:uint = 0;
+         var s:int = 0;
+         var x:int = 0;
+         do
+         {
+            x = param1.readUnsignedByte();
+            v |= (x & 127) << s;
+            s += 7;
+         }
+         while((x & 128) != 0);
+
+         return v;
       }
 
       private static function walk(param1:DisplayObjectContainer, param2:Array, param3:String) : void
@@ -664,7 +801,7 @@ package Tools
          {
             c = param1.getChildAt(i);
             i++;
-            if(!c.visible || c.alpha <= 0)
+            if(!c.visible || c.alpha <= 0 || c == statsText)
             {
                continue;
             }
@@ -694,7 +831,7 @@ package Tools
                {
                   var sm:Matrix = st.transform.matrix.clone();
                   sm.concat(c.transform.concatenatedMatrix);
-                  emit(c,Bitmap(st).bitmapData,0,0,fl,bl,Bitmap(st).smoothing,sm);
+                  emit(c,Bitmap(st).bitmapData,0,0,fl,bl,Bitmap(st).smoothing,sm,st);
                }
             }
             else if(c is Shape)
@@ -718,14 +855,16 @@ package Tools
          }
       }
 
-      private static function emit(param1:DisplayObject, param2:BitmapData, param3:Number, param4:Number, param5:Array, param6:String, param7:Boolean, param8:Matrix = null) : void
+      // One picture on screen. Per object, only the fields that changed since the last frame are written:
+      // object id, change mask, then image / position / rotation+scale / alpha / colour / filters / blend+smoothing.
+      private static function emit(param1:DisplayObject, param2:BitmapData, param3:Number, param4:Number, param5:Array, param6:String, param7:Boolean, param8:Matrix = null, param9:DisplayObject = null) : void
       {
          var ct:ColorTransform = param1.transform.concatenatedColorTransform;
          if(ct.alphaMultiplier <= 0.004)
          {
             return;
          }
-         var info:Object = imageInfo(param2);
+         var info:Object = imageInfo(param2,param9 ? param9 : param1);
          if(!info)
          {
             return;
@@ -741,32 +880,116 @@ package Tools
          {
             m.concat(rootFix);
          }
-         var hasColor:Boolean = ct.redMultiplier != 1 || ct.greenMultiplier != 1 || ct.blueMultiplier != 1 || ct.redOffset != 0 || ct.greenOffset != 0 || ct.blueOffset != 0;
          var fid:int = param5 ? filterSetId(param5) : 0;
-         var flags:int = (hasColor ? 1 : 0) | (fid > 0 ? 2 : 0) | (param7 ? 4 : 0);
-         var b:ByteArray = frameBody;
-         b.writeUnsignedInt(info.id);
-         b.writeByte(flags);
-         b.writeByte(Math.max(0,BLENDS.indexOf(param6)));
-         b.writeFloat(m.a);
-         b.writeFloat(m.b);
-         b.writeFloat(m.c);
-         b.writeFloat(m.d);
-         b.writeShort(clampShort(m.tx * 4));
-         b.writeShort(clampShort(m.ty * 4));
-         b.writeByte(Math.round(Math.min(1,ct.alphaMultiplier) * 255));
-         if(hasColor)
+         var tx:int = clampShort(m.tx * 4);
+         var ty:int = clampShort(m.ty * 4);
+         var al:int = Math.round(Math.min(1,ct.alphaMultiplier) * 255);
+         var col:String = ct.redMultiplier != 1 || ct.greenMultiplier != 1 || ct.blueMultiplier != 1 || ct.redOffset != 0 || ct.greenOffset != 0 || ct.blueOffset != 0 ? [clampShort(ct.redMultiplier * 256),clampShort(ct.greenMultiplier * 256),clampShort(ct.blueMultiplier * 256),clampShort(ct.redOffset),clampShort(ct.greenOffset),clampShort(ct.blueOffset)].join(",") : "";
+         var fl:int = Math.max(0,BLENDS.indexOf(param6)) | (param7 ? 128 : 0);
+         var oid:int = objIds[param1];
+         if(!oid)
          {
-            b.writeShort(clampShort(ct.redMultiplier * 256));
-            b.writeShort(clampShort(ct.greenMultiplier * 256));
-            b.writeShort(clampShort(ct.blueMultiplier * 256));
-            b.writeShort(clampShort(ct.redOffset));
-            b.writeShort(clampShort(ct.greenOffset));
-            b.writeShort(clampShort(ct.blueOffset));
+            oid = nextObj++;
+            objIds[param1] = oid;
          }
-         if(fid > 0)
+         var last:Object = lastSent[oid];
+         var mask:int = 0;
+         if(!last)
          {
-            b.writeShort(fid);
+            last = {};
+            lastSent[oid] = last;
+            mask = 127;
+         }
+         else
+         {
+            if(last.img != info.id)
+            {
+               mask |= 1;
+            }
+            if(last.tx != tx || last.ty != ty)
+            {
+               mask |= 2;
+            }
+            if(Math.abs(last.a - m.a) > 0.0005 || Math.abs(last.b - m.b) > 0.0005 || Math.abs(last.c - m.c) > 0.0005 || Math.abs(last.d - m.d) > 0.0005)
+            {
+               mask |= 4;
+            }
+            if(last.al != al)
+            {
+               mask |= 8;
+            }
+            if(last.col != col)
+            {
+               mask |= 16;
+            }
+            if(last.fid != fid)
+            {
+               mask |= 32;
+            }
+            if(last.fl != fl)
+            {
+               mask |= 64;
+            }
+         }
+         last.seen = frameSeq;
+         var b:ByteArray = frameBody;
+         writeVar(b,oid);
+         b.writeByte(mask);
+         if(mask & 1)
+         {
+            writeVar(b,info.id);
+            last.img = info.id;
+         }
+         if(mask & 2)
+         {
+            b.writeShort(tx);
+            b.writeShort(ty);
+            last.tx = tx;
+            last.ty = ty;
+         }
+         if(mask & 4)
+         {
+            b.writeFloat(m.a);
+            b.writeFloat(m.b);
+            b.writeFloat(m.c);
+            b.writeFloat(m.d);
+            last.a = m.a;
+            last.b = m.b;
+            last.c = m.c;
+            last.d = m.d;
+         }
+         if(mask & 8)
+         {
+            b.writeByte(al);
+            last.al = al;
+         }
+         if(mask & 16)
+         {
+            if(col.length > 0)
+            {
+               b.writeByte(1);
+               b.writeShort(clampShort(ct.redMultiplier * 256));
+               b.writeShort(clampShort(ct.greenMultiplier * 256));
+               b.writeShort(clampShort(ct.blueMultiplier * 256));
+               b.writeShort(clampShort(ct.redOffset));
+               b.writeShort(clampShort(ct.greenOffset));
+               b.writeShort(clampShort(ct.blueOffset));
+            }
+            else
+            {
+               b.writeByte(0);
+            }
+            last.col = col;
+         }
+         if(mask & 32)
+         {
+            writeVar(b,fid);
+            last.fid = fid;
+         }
+         if(mask & 64)
+         {
+            b.writeByte(fl);
+            last.fl = fl;
          }
          ++frameCount;
       }
@@ -778,7 +1001,7 @@ package Tools
 
       // Pixels are sent the first time a picture is used. Pictures are checked now and then for changes (the
       // floor's blood decals, bars, HUD timers, vector graphics), and only the changed rectangle is resent.
-      private static function imageInfo(param1:BitmapData) : Object
+      private static function imageInfo(param1:BitmapData, param2:DisplayObject) : Object
       {
          var info:Object = imgInfo[param1];
          if(!info)
@@ -791,16 +1014,17 @@ package Tools
                   checked:frameNo,
                   interval:2,
                   sig:signature(param1),
-                  copy:null
+                  copy:null,
+                  base:null
                };
+               imgInfo[param1] = info;
+               idInfo[info.id] = info;
+               registerImage(info,param1,param2);
             }
             catch(e:Error)
             {
                return null;
             }
-            imgInfo[param1] = info;
-            idInfo[info.id] = info;
-            sendImage(info.id,param1,param1.rect,true);
             return info;
          }
          info.seen = frameNo;
@@ -843,8 +1067,91 @@ package Tools
          return s;
       }
 
+      // A new picture: by name if the guest's copy of the game already has it (plus any pixels that differ from
+      // the original), otherwise its pixels.
+      private static function registerImage(param1:Object, param2:BitmapData, param3:DisplayObject) : void
+      {
+         var name:String = staticNames ? staticNames[param2] : null;
+         if(name)
+         {
+            sendRef(param1.id,1,name);
+            param1.copy = param2.clone();
+            return;
+         }
+         var cls:String = param3 is Bitmap ? getQualifiedClassName(param3) : null;
+         if(cls && cls.indexOf("::Embeds_") > 0)
+         {
+            var orig:BitmapData = classOriginal(cls);
+            if(orig && orig.width == param2.width && orig.height == param2.height)
+            {
+               sendRef(param1.id,2,cls);
+               var diff:Object = param2.compare(orig);
+               if(diff is BitmapData)
+               {
+                  var r:Rectangle = BitmapData(diff).getColorBoundsRect(4294967295,0,false);
+                  BitmapData(diff).dispose();
+                  if(r.width > 0 && r.height > 0)
+                  {
+                     sendImage(param1.id,param2,r,false);
+                  }
+                  param1.copy = param2.clone();
+               }
+               else
+               {
+                  param1.base = orig;
+               }
+               return;
+            }
+         }
+         var text:ByteArray = textDescs[param2];
+         if(text)
+         {
+            var tb:ByteArray = new ByteArray();
+            writeVar(tb,param1.id);
+            tb.writeShort(param2.width);
+            tb.writeShort(param2.height);
+            tb.writeBytes(text);
+            sendData(D_TEXT,tb);
+            return;
+         }
+         sendImage(param1.id,param2,param2.rect,true);
+      }
+
+      private static function classOriginal(param1:String) : BitmapData
+      {
+         if(classOriginals[param1] === undefined)
+         {
+            classOriginals[param1] = null;
+            try
+            {
+               var obj:Object = new (getDefinitionByName(param1) as Class)();
+               if(obj is Bitmap)
+               {
+                  classOriginals[param1] = Bitmap(obj).bitmapData;
+               }
+            }
+            catch(e:Error)
+            {
+            }
+         }
+         return classOriginals[param1];
+      }
+
+      private static function sendRef(param1:int, param2:int, param3:String) : void
+      {
+         var b:ByteArray = new ByteArray();
+         writeVar(b,param1);
+         b.writeByte(param2);
+         b.writeUTF(param3);
+         sendData(D_IMAGEREF,b);
+      }
+
       private static function sendChange(param1:Object, param2:BitmapData) : void
       {
+         if(!param1.copy && param1.base)
+         {
+            param1.copy = BitmapData(param1.base).clone();
+         }
          if(!param1.copy)
          {
             sendImage(param1.id,param2,param2.rect,false);
@@ -866,6 +1173,25 @@ package Tools
 
       private static function sendImage(param1:int, param2:BitmapData, param3:Rectangle, param4:Boolean) : void
       {
+         // Big opaque areas (screen-fade snapshots, room floors) go as JPEG: a tenth of the size, so they don't
+         // hold up the frames behind them.
+         if(param3.width * param3.height >= 40000)
+         {
+            var opaque:Boolean = !param2.transparent || !param2.getColorBoundsRect(4278190080,4278190080,false).intersects(param3);
+            if(opaque)
+            {
+               var jb:ByteArray = new ByteArray();
+               writeVar(jb,param1);
+               jb.writeByte(param4 ? 1 : 0);
+               jb.writeShort(param2.width);
+               jb.writeShort(param2.height);
+               jb.writeShort(param3.x);
+               jb.writeShort(param3.y);
+               jb.writeBytes(param2.encode(param3,new JPEGEncoderOptions(85)));
+               sendData(D_JPEG,jb);
+               return;
+            }
+         }
          var b:ByteArray = new ByteArray();
          b.writeUnsignedInt(param1);
          b.writeByte(param4 ? 1 : 0);
@@ -920,6 +1246,15 @@ package Tools
          {
             sendData(D_FREE,b);
          }
+         // Objects not shown for ~10 s are forgotten (sent in full if they come back). The guest keeps its copy
+         // longer, so it never lacks the state a change is relative to.
+         for(id in lastSent)
+         {
+            if(frameSeq - lastSent[id].seen > 300)
+            {
+               delete lastSent[id];
+            }
+         }
       }
 
       // Text and vector graphics are drawn into a picture on the host, and redrawn when they change.
@@ -940,17 +1275,25 @@ package Tools
             }
             var ox:int = Math.floor(r.x);
             var oy:int = Math.floor(r.y);
+            // The guest has the same fonts, so it gets the text and draws it itself; this empty picture only
+            // stands for it on the host.
             var bd:BitmapData = new BitmapData(Math.ceil(r.right) - ox + 1,Math.ceil(r.bottom) - oy + 1,true,0);
-            var saved:Array = param1.filters;
-            if(saved.length > 0)
-            {
-               param1.filters = [];
-            }
-            bd.draw(param1,new Matrix(1,0,0,1,-ox,-oy),null,null,null,true);
-            if(saved.length > 0)
-            {
-               param1.filters = saved;
-            }
+            var tb:ByteArray = new ByteArray();
+            tb.writeShort(ox);
+            tb.writeShort(oy);
+            tb.writeFloat(param1.width);
+            tb.writeFloat(param1.height);
+            tb.writeByte((param1.embedFonts ? 1 : 0) | (param1.multiline ? 2 : 0) | (param1.wordWrap ? 4 : 0) | (param1.background ? 8 : 0) | (param1.border ? 16 : 0));
+            tb.writeUnsignedInt(param1.backgroundColor);
+            tb.writeUnsignedInt(param1.borderColor);
+            tb.writeUTF(param1.autoSize);
+            tb.writeUTF(param1.antiAliasType);
+            tb.writeUTF(param1.gridFitType);
+            tb.writeFloat(param1.sharpness);
+            tb.writeFloat(param1.thickness);
+            tb.writeShort(param1.scrollV);
+            tb.writeUTF(param1.htmlText);
+            textDescs[bd] = tb;
             c = {
                key:key,
                bd:bd,
@@ -1198,6 +1541,7 @@ package Tools
          b.writeByte(PAD_CONTROLS.length);
          var id:String = null;
          var v:Number = NaN;
+         var q:Array = [];
          for each(id in PAD_CONTROLS)
          {
             v = Number(values[id]) || 0;
@@ -1205,9 +1549,17 @@ package Tools
             {
                v = kb[id];
             }
-            b.writeByte(Math.round(Math.max(-1,Math.min(1,v)) * 127));
+            q.push(Math.round(Math.max(-1,Math.min(1,v)) * 127));
+            b.writeByte(q[q.length - 1]);
          }
-         sendData(D_PAD,b);
+         // Sent the moment it changes, plus a refresh every 100 ms.
+         var bytesKey:String = q.join(",");
+         if(bytesKey != lastPadBytes || getTimer() - lastPadSent > 100)
+         {
+            lastPadBytes = bytesKey;
+            lastPadSent = getTimer();
+            sendData(D_PAD,b);
+         }
          // Holding BACK for 3 seconds leaves (ESC also works).
          if(Number(values[Input.PAD_BACK]) > 0.5)
          {
@@ -1237,6 +1589,13 @@ package Tools
          channels = {};
          pool = [];
          poolFilter = [];
+         gstate = {};
+         snaps = [];
+         sharedIds = {};
+         pendingJpeg = {};
+         arrivals = [];
+         jitter = 0;
+         bufferMs = 60;
          view = new Sprite();
          view.mouseEnabled = false;
          view.mouseChildren = false;
@@ -1253,6 +1612,7 @@ package Tools
          hint.selectable = false;
          hint.width = 800;
          hint.height = 20;
+         hint.y = 580;
          hint.text = "  ONLINE: you are player 2.   ESC or hold BACK for 3 s to leave.";
          view.addChild(hint);
          hintUntil = getTimer() + 8000;
@@ -1290,11 +1650,17 @@ package Tools
          }
          view = null;
          layer = null;
-         for each(bd in images)
+         for(id in images)
          {
-            bd.dispose();
+            if(!sharedIds[id])
+            {
+               BitmapData(images[id]).dispose();
+            }
          }
          images = {};
+         sharedIds = {};
+         snaps = [];
+         gstate = {};
          pool = [];
          poolFilter = [];
          if(savedMute)
@@ -1316,6 +1682,174 @@ package Tools
             stage.setChildIndex(view,stage.numChildren - 1);
          }
          hint.visible = getTimer() < hintUntil;
+         renderGuest();
+      }
+
+      // Frames are shown a little behind the host, at a steady pace, with movement blended between frames, so
+      // uneven network arrival doesn't show as stutter. The delay follows the measured jitter.
+      private static function renderGuest() : void
+      {
+         if(snaps.length == 0)
+         {
+            return;
+         }
+         var target:Number = Math.max(45,Math.min(400,jitter + 40));
+         if(target > bufferMs)
+         {
+            bufferMs = target;
+         }
+         else
+         {
+            bufferMs += (target - bufferMs) * 0.01;
+         }
+         var rt:Number = getTimer() - clockBase - bufferMs;
+         // Way behind (e.g. after a hitch): skip ahead rather than playing old frames.
+         while(snaps.length > 2 && rt - snaps[0].t > 600)
+         {
+            snaps.shift();
+         }
+         while(snaps.length >= 2 && snaps[1].t <= rt)
+         {
+            snaps.shift();
+         }
+         var s0:Object = snaps[0];
+         var s1:Object = snaps.length > 1 ? snaps[1] : null;
+         var f:Number = s1 && rt > s0.t && s1.t > s0.t ? Math.min(1,(rt - s0.t) / (s1.t - s0.t)) : 0;
+         if(!s0.done)
+         {
+            s0.done = true;
+            applyChannels(s0.chans);
+         }
+         drawSnapshot(s0,s1,f);
+      }
+
+      private static function drawSnapshot(param1:Object, param2:Object, param3:Number) : void
+      {
+         var list:Array = param1.list;
+         var n:int = int(list.length);
+         var k:int = 0;
+         var e:Object = null;
+         var e1:Object = null;
+         var bmp:Bitmap = null;
+         var bd:BitmapData = null;
+         var m:Matrix = tmpMatrix;
+         var ct:ColorTransform = null;
+         var g:Number = NaN;
+         while(k < n)
+         {
+            e = list[k];
+            bmp = pool[k];
+            if(!bmp)
+            {
+               bmp = new Bitmap();
+               pool[k] = bmp;
+               poolFilter[k] = 0;
+               layer.addChild(bmp);
+            }
+            bd = images[e.img];
+            if(!bd)
+            {
+               bmp.visible = false;
+               k++;
+               continue;
+            }
+            if(bmp.bitmapData != bd)
+            {
+               bmp.bitmapData = bd;
+            }
+            m.a = e.a;
+            m.b = e.b;
+            m.c = e.c;
+            m.d = e.d;
+            m.tx = e.tx;
+            m.ty = e.ty;
+            g = 1;
+            e1 = param2 && param3 > 0 ? param2.byId[e.oid] : null;
+            // Blend toward the next frame, unless the object jumped (teleport, new room) or changed picture.
+            if(e1 && e1.img == e.img && Math.abs(e1.tx - e.tx) + Math.abs(e1.ty - e.ty) < 80 && Math.abs(e1.a - e.a) + Math.abs(e1.b - e.b) + Math.abs(e1.c - e.c) + Math.abs(e1.d - e.d) < 0.8)
+            {
+               m.a += (e1.a - e.a) * param3;
+               m.b += (e1.b - e.b) * param3;
+               m.c += (e1.c - e.c) * param3;
+               m.d += (e1.d - e.d) * param3;
+               m.tx += (e1.tx - e.tx) * param3;
+               m.ty += (e1.ty - e.ty) * param3;
+            }
+            bmp.smoothing = (e.fl & 128) != 0;
+            bmp.transform.matrix = m;
+            ct = new ColorTransform(1,1,1,e.al);
+            if(e.col)
+            {
+               ct.redMultiplier = e.col[0] / 256;
+               ct.greenMultiplier = e.col[1] / 256;
+               ct.blueMultiplier = e.col[2] / 256;
+               ct.redOffset = e.col[3];
+               ct.greenOffset = e.col[4];
+               ct.blueOffset = e.col[5];
+            }
+            bmp.transform.colorTransform = ct;
+            bmp.blendMode = BLENDS[e.fl & 127] || BlendMode.NORMAL;
+            if(poolFilter[k] != e.fid)
+            {
+               poolFilter[k] = e.fid;
+               bmp.filters = e.fid > 0 && filterSets[e.fid] ? filterSets[e.fid] : [];
+            }
+            bmp.visible = true;
+            k++;
+         }
+         while(k < pool.length)
+         {
+            Bitmap(pool[k]).visible = false;
+            k++;
+         }
+      }
+
+      private static function updateStats() : void
+      {
+         if(!statsOn)
+         {
+            if(statsText && statsText.parent)
+            {
+               statsText.parent.removeChild(statsText);
+            }
+            bytesOut = bytesIn = framesIn = 0;
+            statsAt = getTimer();
+            return;
+         }
+         if(!statsText)
+         {
+            statsText = new TextField();
+            statsText.defaultTextFormat = new TextFormat("_typewriter",12,16776960,true);
+            statsText.background = true;
+            statsText.backgroundColor = 0;
+            statsText.selectable = false;
+            statsText.mouseEnabled = false;
+            statsText.width = 800;
+            statsText.height = 18;
+            statsText.y = 560;
+         }
+         if(!statsText.parent || stage.getChildIndex(statsText) != stage.numChildren - 1)
+         {
+            stage.addChild(statsText);
+         }
+         var now:int = getTimer();
+         if(now - statsAt < 500)
+         {
+            return;
+         }
+         var secs:Number = (now - statsAt) / 1000;
+         statsAt = now;
+         var line:String = "ONLINE OFF";
+         if(mode == 1)
+         {
+            line = "HOST  capture " + captureMs.toFixed(1) + " ms   upload " + Math.round(bytesOut / 1024 / secs) + " KB/s   backlog " + Math.round((sock ? sock.bytesPending : 0) / 1024) + " KB   objects " + frameCount + "   " + (peer ? "friend connected" : "waiting");
+         }
+         else if(mode == 2)
+         {
+            line = "GUEST  download " + Math.round(bytesIn / 1024 / secs) + " KB/s   frames " + Math.round(framesIn / secs) + "/s   jitter " + Math.round(jitter) + " ms   delay " + Math.round(bufferMs) + " ms   queued " + snaps.length;
+         }
+         bytesOut = bytesIn = framesIn = 0;
+         statsText.text = " " + line + "   (F8)";
       }
 
       private static function onHostData(param1:ByteArray) : void
@@ -1328,6 +1862,18 @@ package Tools
          else if(kind == D_FRAME)
          {
             readFrame(param1);
+         }
+         else if(kind == D_IMAGEREF)
+         {
+            readImageRef(param1);
+         }
+         else if(kind == D_TEXT)
+         {
+            readText(param1);
+         }
+         else if(kind == D_JPEG)
+         {
+            readJpeg(param1);
          }
          else if(kind == D_FILTERS)
          {
@@ -1352,16 +1898,85 @@ package Tools
                var fid:int = param1.readUnsignedInt();
                if(images[fid])
                {
-                  BitmapData(images[fid]).dispose();
+                  if(!sharedIds[fid])
+                  {
+                     BitmapData(images[fid]).dispose();
+                  }
                   delete images[fid];
+                  delete sharedIds[fid];
                }
             }
          }
       }
 
+      // JPEG decoding is asynchronous; later updates to the same picture wait for it (pendingJpeg).
+      private static function readJpeg(param1:ByteArray) : void
+      {
+         var id:int = readVar(param1);
+         var isNew:Boolean = param1.readUnsignedByte() == 1;
+         var w:int = param1.readUnsignedShort();
+         var h:int = param1.readUnsignedShort();
+         var x:int = param1.readUnsignedShort();
+         var y:int = param1.readUnsignedShort();
+         var jpeg:ByteArray = new ByteArray();
+         param1.readBytes(jpeg,0,param1.bytesAvailable);
+         if(!pendingJpeg[id])
+         {
+            pendingJpeg[id] = [];
+         }
+         var loader:Loader = new Loader();
+         var started:Sprite = view;
+         loader.contentLoaderInfo.addEventListener(Event.COMPLETE,function(param1:Event):void
+         {
+            if(view != started)
+            {
+               return;
+            }
+            var bd:BitmapData = images[id];
+            if(isNew || !bd || bd.width != w || bd.height != h)
+            {
+               if(bd && !sharedIds[id])
+               {
+                  bd.dispose();
+               }
+               bd = new BitmapData(w,h,true,0);
+               images[id] = bd;
+               delete sharedIds[id];
+            }
+            else if(sharedIds[id])
+            {
+               bd = bd.clone();
+               images[id] = bd;
+               delete sharedIds[id];
+            }
+            var pic:BitmapData = Bitmap(loader.content).bitmapData;
+            bd.copyPixels(pic,pic.rect,new Point(x,y));
+            pic.dispose();
+            var waiting:Array = pendingJpeg[id];
+            delete pendingJpeg[id];
+            var msg:ByteArray = null;
+            for each(msg in waiting)
+            {
+               msg.position = 0;
+               onHostData(msg);
+            }
+         });
+         loader.contentLoaderInfo.addEventListener(IOErrorEvent.IO_ERROR,function(param1:Event):void
+         {
+            delete pendingJpeg[id];
+         });
+         loader.loadBytes(jpeg);
+      }
+
       private static function readImage(param1:ByteArray) : void
       {
+         param1.position = 1;
          var id:int = param1.readUnsignedInt();
+         if(pendingJpeg[id])
+         {
+            pendingJpeg[id].push(param1);
+            return;
+         }
          var isNew:Boolean = param1.readUnsignedByte() == 1;
          var w:int = param1.readUnsignedShort();
          var h:int = param1.readUnsignedShort();
@@ -1375,15 +1990,101 @@ package Tools
          var bd:BitmapData = images[id];
          if(isNew || !bd || bd.width != w || bd.height != h)
          {
-            if(bd)
+            if(bd && !sharedIds[id])
             {
                bd.dispose();
             }
             bd = new BitmapData(w,h,true,0);
             images[id] = bd;
+            delete sharedIds[id];
+         }
+         else if(sharedIds[id])
+         {
+            // A shared game picture is about to be drawn into: give this id its own copy first.
+            bd = bd.clone();
+            images[id] = bd;
+            delete sharedIds[id];
          }
          px.position = 0;
          bd.setPixels(r,px);
+      }
+
+      // Text from the host, drawn here with this copy's (identical) fonts.
+      private static function readText(param1:ByteArray) : void
+      {
+         var id:int = readVar(param1);
+         var w:int = param1.readUnsignedShort();
+         var h:int = param1.readUnsignedShort();
+         var ox:int = param1.readShort();
+         var oy:int = param1.readShort();
+         var tf:TextField = new TextField();
+         tf.width = param1.readFloat();
+         tf.height = param1.readFloat();
+         var fl:int = param1.readUnsignedByte();
+         tf.embedFonts = (fl & 1) != 0;
+         // Always multiline: the game puts line breaks in single-line fields, which htmlText would drop.
+         tf.multiline = true;
+         tf.wordWrap = (fl & 4) != 0;
+         tf.background = (fl & 8) != 0;
+         tf.border = (fl & 16) != 0;
+         tf.backgroundColor = param1.readUnsignedInt();
+         tf.borderColor = param1.readUnsignedInt();
+         var autoSize:String = param1.readUTF();
+         tf.antiAliasType = param1.readUTF();
+         tf.gridFitType = param1.readUTF();
+         tf.sharpness = param1.readFloat();
+         tf.thickness = param1.readFloat();
+         var scroll:int = param1.readShort();
+         tf.htmlText = param1.readUTF();
+         tf.autoSize = autoSize;
+         tf.scrollV = scroll;
+         var bd:BitmapData = new BitmapData(Math.max(1,w),Math.max(1,h),true,0);
+         try
+         {
+            bd.draw(tf,new Matrix(1,0,0,1,-ox,-oy),null,null,null,true);
+         }
+         catch(e:Error)
+         {
+         }
+         if(images[id] && !sharedIds[id])
+         {
+            BitmapData(images[id]).dispose();
+         }
+         images[id] = bd;
+         delete sharedIds[id];
+      }
+
+      // A picture this copy of the game already has: Embeds' shared BitmapData by name, or an embedded class.
+      private static function readImageRef(param1:ByteArray) : void
+      {
+         var id:int = readVar(param1);
+         var kind:int = param1.readUnsignedByte();
+         var name:String = param1.readUTF();
+         var bd:BitmapData = null;
+         try
+         {
+            if(kind == 1)
+            {
+               bd = (getDefinitionByName("GlobalSetup.Embeds") as Class)[name] as BitmapData;
+            }
+            else
+            {
+               bd = guestClassCache[name];
+               if(!bd)
+               {
+                  bd = Bitmap(new (getDefinitionByName(name) as Class)()).bitmapData;
+                  guestClassCache[name] = bd;
+               }
+            }
+         }
+         catch(e:Error)
+         {
+         }
+         if(bd)
+         {
+            images[id] = bd;
+            sharedIds[id] = true;
+         }
       }
 
       private static function readFilters(param1:ByteArray) : void
@@ -1449,80 +2150,159 @@ package Tools
          param1.readBytes(bytes,0,param1.bytesAvailable);
          bytes.uncompress();
          bytes.position = 0;
-         var count:int = bytes.readUnsignedShort();
+         var t:Number = bytes.readUnsignedInt();
+         var count:int = readVar(bytes);
+         var list:Array = new Array(count);
+         var byId:Object = {};
          var k:int = 0;
-         var bmp:Bitmap = null;
-         var bd:BitmapData = null;
-         var id:int = 0;
-         var flags:int = 0;
-         var blend:int = 0;
-         var m:Matrix = null;
-         var alpha:Number = NaN;
-         var ct:ColorTransform = null;
-         var fid:int = 0;
+         var oid:int = 0;
+         var mask:int = 0;
+         var st:Object = null;
+         var e:Object = null;
+         ++framesIn;
          while(k < count)
          {
-            id = bytes.readUnsignedInt();
-            flags = bytes.readUnsignedByte();
-            blend = bytes.readUnsignedByte();
-            m = new Matrix(bytes.readFloat(),bytes.readFloat(),bytes.readFloat(),bytes.readFloat());
-            m.tx = bytes.readShort() / 4;
-            m.ty = bytes.readShort() / 4;
-            alpha = bytes.readUnsignedByte() / 255;
-            ct = new ColorTransform(1,1,1,alpha);
-            if(flags & 1)
+            oid = readVar(bytes);
+            mask = bytes.readUnsignedByte();
+            st = gstate[oid];
+            if(!st)
             {
-               ct.redMultiplier = bytes.readShort() / 256;
-               ct.greenMultiplier = bytes.readShort() / 256;
-               ct.blueMultiplier = bytes.readShort() / 256;
-               ct.redOffset = bytes.readShort();
-               ct.greenOffset = bytes.readShort();
-               ct.blueOffset = bytes.readShort();
+               st = {
+                  img:0,
+                  tx:0,
+                  ty:0,
+                  a:1,
+                  b:0,
+                  c:0,
+                  d:1,
+                  al:1,
+                  col:null,
+                  fid:0,
+                  fl:0
+               };
+               gstate[oid] = st;
             }
-            fid = (flags & 2) ? bytes.readUnsignedShort() : 0;
-            bmp = pool[k];
-            if(!bmp)
+            if(mask & 1)
             {
-               bmp = new Bitmap();
-               pool[k] = bmp;
-               poolFilter[k] = 0;
-               layer.addChild(bmp);
+               st.img = readVar(bytes);
             }
-            bd = images[id];
-            if(!bd)
+            if(mask & 2)
             {
-               bmp.visible = false;
-               k++;
-               continue;
+               st.tx = bytes.readShort() / 4;
+               st.ty = bytes.readShort() / 4;
             }
-            if(bmp.bitmapData != bd)
+            if(mask & 4)
             {
-               bmp.bitmapData = bd;
+               st.a = bytes.readFloat();
+               st.b = bytes.readFloat();
+               st.c = bytes.readFloat();
+               st.d = bytes.readFloat();
             }
-            bmp.smoothing = (flags & 4) != 0;
-            bmp.transform.matrix = m;
-            bmp.transform.colorTransform = ct;
-            bmp.blendMode = BLENDS[blend] || BlendMode.NORMAL;
-            if(poolFilter[k] != fid)
+            if(mask & 8)
             {
-               poolFilter[k] = fid;
-               bmp.filters = fid > 0 && filterSets[fid] ? filterSets[fid] : [];
+               st.al = bytes.readUnsignedByte() / 255;
             }
-            bmp.visible = true;
+            if(mask & 16)
+            {
+               st.col = bytes.readUnsignedByte() == 1 ? [bytes.readShort(),bytes.readShort(),bytes.readShort(),bytes.readShort(),bytes.readShort(),bytes.readShort()] : null;
+            }
+            if(mask & 32)
+            {
+               st.fid = readVar(bytes);
+            }
+            if(mask & 64)
+            {
+               st.fl = bytes.readUnsignedByte();
+            }
+            st.seen = getTimer();
+            e = {
+               oid:oid,
+               img:st.img,
+               tx:st.tx,
+               ty:st.ty,
+               a:st.a,
+               b:st.b,
+               c:st.c,
+               d:st.d,
+               al:st.al,
+               col:st.col,
+               fid:st.fid,
+               fl:st.fl
+            };
+            list[k] = e;
+            byId[oid] = e;
             k++;
          }
-         while(k < pool.length)
+         snaps.push({
+            t:t,
+            list:list,
+            byId:byId,
+            chans:readChannels(bytes),
+            done:false
+         });
+         trackArrival(t);
+         // Object states the host has long forgotten (it resends them in full) can go.
+         if(frameNo % 300 == 0)
          {
-            Bitmap(pool[k]).visible = false;
-            k++;
+            var now:int = getTimer();
+            var key:String = null;
+            for(key in gstate)
+            {
+               if(now - gstate[key].seen > 30000)
+               {
+                  delete gstate[key];
+               }
+            }
          }
-         readChannels(bytes);
       }
 
-      private static function readChannels(param1:ByteArray) : void
+      // Jitter = how much later than the earliest-arriving frame of the last 10 s frames arrive: the 95th
+      // percentile over the last 3 s, so one stray late packet doesn't add delay for everything after it.
+      private static function trackArrival(param1:Number) : void
+      {
+         var now:int = getTimer();
+         var d:Number = now - param1;
+         arrivals.push([now,d]);
+         while(arrivals.length > 0 && now - arrivals[0][0] > 10000)
+         {
+            arrivals.shift();
+         }
+         var base:Number = d;
+         var recent:Array = [];
+         var a:Array = null;
+         for each(a in arrivals)
+         {
+            if(a[1] < base)
+            {
+               base = a[1];
+            }
+         }
+         for each(a in arrivals)
+         {
+            if(now - a[0] < 3000)
+            {
+               recent.push(a[1] - base);
+            }
+         }
+         recent.sort(Array.NUMERIC);
+         clockBase = base;
+         jitter = recent.length > 0 ? Number(recent[Math.min(recent.length - 1,int(recent.length * 0.95))]) : 0;
+      }
+
+      private static function readChannels(param1:ByteArray) : Array
+      {
+         var n:int = param1.readUnsignedShort();
+         var list:Array = [];
+         while(n-- > 0)
+         {
+            list.push([param1.readUnsignedInt(),param1.readUnsignedShort(),param1.readUnsignedShort() / 1000,param1.readByte() / 100,param1.readUnsignedByte() == 1,param1.readUnsignedInt()]);
+         }
+         return list;
+      }
+
+      private static function applyChannels(param1:Array) : void
       {
          var id:String = null;
-         var n:int = param1.readUnsignedShort();
          var seen:Object = {};
          var cid:int = 0;
          var sid:int = 0;
@@ -1532,14 +2312,15 @@ package Tools
          var pos:Number = NaN;
          var c:Object = null;
          var s:Sound = null;
-         while(n-- > 0)
+         var ch:Array = null;
+         for each(ch in param1)
          {
-            cid = param1.readUnsignedInt();
-            sid = param1.readUnsignedShort();
-            vol = param1.readUnsignedShort() / 1000;
-            pan = param1.readByte() / 100;
-            loop = param1.readUnsignedByte() == 1;
-            pos = param1.readUnsignedInt();
+            cid = ch[0];
+            sid = ch[1];
+            vol = ch[2];
+            pan = ch[3];
+            loop = ch[4];
+            pos = ch[5];
             seen[cid] = true;
             c = channels[cid];
             if(!c)

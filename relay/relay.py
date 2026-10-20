@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import logging
 import random
+import socket
 import struct
 
 HOST, JOIN, DATA, PING = 1, 2, 3, 4
@@ -92,6 +93,10 @@ async def serve_policy(reader, writer):
 async def handle(reader, writer):
     peer = Peer(writer)
     addr = writer.get_extra_info("peername")
+    sock = writer.get_extra_info("socket")
+    if sock is not None:
+        # Send small messages (controller input) immediately instead of batching them.
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     try:
         header = await asyncio.wait_for(reader.readexactly(4), IDLE_TIMEOUT)
         if header == b"<pol":

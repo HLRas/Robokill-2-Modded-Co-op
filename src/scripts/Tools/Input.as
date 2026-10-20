@@ -177,6 +177,8 @@ package Tools
 
       private var aimFrame:int = -100;
 
+      private var dialogFrame:int = -100;
+
       private var p2Frame:int = -100;
 
       private var aimOriginX:Number = 0;
@@ -263,9 +265,20 @@ package Tools
          }
       }
 
+      // A dialog with buttons (a comms message) is up: controllers drive the menu cursor instead of aiming.
+      public function setDialogOpen() : void
+      {
+         dialogFrame = frame;
+      }
+
+      public function dialogOpen() : Boolean
+      {
+         return frame - dialogFrame <= 2;
+      }
+
       public function inGameplay() : Boolean
       {
-         return frame - aimFrame <= 2 || frame - p2Frame <= 2;
+         return (frame - aimFrame <= 2 || frame - p2Frame <= 2) && !dialogOpen();
       }
 
       // This machine's controllers merged into one set of control values (null = none), for an online guest.
@@ -940,7 +953,8 @@ package Tools
             padCursorY = Math.max(0,Math.min(stage.stageHeight,padCursorY));
          }
          // A / RT / LT act as the mouse button (click in menus).
-         padFire = menuPad.fire;
+         // Clicking a dialog button with A shouldn't also fire the player's guns.
+         padFire = menuPad.fire && !dialogOpen();
          if(padPressed(menuPad,PAD_A) || padPressed(menuPad,PAD_RT) || padPressed(menuPad,PAD_LT))
          {
             mouseButtonHit = 1;

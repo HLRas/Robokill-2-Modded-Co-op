@@ -10,3 +10,4 @@ Objects/ChargeRocket.as
 Scenes/MainMenu.as
 Tools/Net.as
 InventoryScreen/PauseMenu.as
+PremiumContent/PremiumContentNotifier.as

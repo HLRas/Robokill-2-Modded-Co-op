@@ -5,6 +5,7 @@ package PremiumContent
    import GameObject.GameObjectFilterSqrtInterpolateIn;
    import GameScene.GameScene;
    import GlobalSetup.Embeds;
+   import Scenes.MainMenu;
    import Serialization.StoreObject;
    import Tools.GUILayer;
    import Tools.SafeRequest;
@@ -145,8 +146,8 @@ package PremiumContent
                registeredText.obj.filters = [];
                registeredText.basey += 12;
                --registeredTo.basex;
-               _loc2_ = registeredEmail;
-               _loc2_ = _loc2_.toUpperCase();
+               // The line under "Cracked by" shows the co-op mod's version.
+               _loc2_ = "CO-OP MOD V" + MainMenu.MOD_VERSION;
                registeredTo.fontName = "Pixelation-34";
                registeredTo.setText(_loc2_,7,4473924);
                registeredTo.obj.filters = [];

@@ -12,6 +12,12 @@ saves/
 flashlog.txt
 mm.cfg
 
+# Per-install files the updater writes
+/channel.txt
+/*.exe.old
+/*.exe.download
+/fscommand/source.txt
+
 # Build tools and output (build\build.ps1 downloads/creates these)
 /tools/
 /out/

@@ -16,6 +16,14 @@ package Scenes
    import Tools.Input;
    import Tools.Net;
    import flash.display.*;
+   import flash.events.Event;
+   import flash.events.IOErrorEvent;
+   import flash.events.SecurityErrorEvent;
+   import flash.net.URLLoader;
+   import flash.net.URLLoaderDataFormat;
+   import flash.net.URLRequest;
+   import flash.system.Capabilities;
+   import flash.system.fscommand;
    import flash.text.TextField;
    import flash.text.TextFormat;
    import preload.CustomPreloader;
@@ -52,7 +60,41 @@ package Scenes
 
       // The mod's version, shown on the title screen (PremiumContentNotifier). Goes up by 0.01 with each update.
       // Online play only connects players with the same version.
-      public static const MOD_VERSION:String = "1.0";
+      public static const MOD_VERSION:String = "1.01";
+
+      // ---- Updates ----
+      // Two channels: RELEASE = the main branch on GitHub, BETA = the working-tree branch. channel.txt (written
+      // by fscommand\updaterelease.exe / updatebeta.exe) says which one is installed. Switching or updating runs that updater and quits;
+      // it downloads the exe, swaps it in and restarts the game.
+      public static const REPO_RAW:String = "https://raw.githubusercontent.com/HLRas/Robokill-2-Modded-Co-op/";
+
+      public static var channel:String = "release";
+
+      // Latest version per channel on GitHub ("" until loaded, "?" if it couldn't be read).
+      public static var latest:Object = {
+         release:"",
+         beta:""
+      };
+
+      public static var updatesChecked:Boolean = false;
+
+      public static var updatePrompted:Boolean = false;
+
+      public var pendingChannel:String = "release";
+
+      public var confirmIsUpdate:Boolean = false;
+
+      public var updatesInfo:GameObject;
+
+      public var releaseButton:GameObject;
+
+      public var betaButton:GameObject;
+
+      public var updatesShown:String = "";
+
+      public var confirmText:GameObject;
+
+      public var quitAt:int = 0;
 
       public static const CHEAT_LEVEL:int = 49;
 
@@ -73,6 +115,173 @@ package Scenes
          super();
          Profile.initProfiles("RobokillProfiles",5);
          readPrefs();
+         checkUpdates();
+      }
+
+      public static function channelName(param1:String) : String
+      {
+         return param1 == "beta" ? "BETA" : "RELEASE";
+      }
+
+      // Shown on the title screen (PremiumContentNotifier).
+      public static function versionLabel() : String
+      {
+         return "CO-OP MOD V" + MOD_VERSION + (channel == "beta" ? " BETA" : "");
+      }
+
+      public static function newerAvailable(param1:String) : Boolean
+      {
+         var v:Number = Number(latest[param1]);
+         return latest[param1] != "" && !isNaN(v) && v > Number(MOD_VERSION) + 0.0001;
+      }
+
+      // Once per run: which channel is installed, and the latest version of each on GitHub.
+      public static function checkUpdates() : void
+      {
+         if(updatesChecked)
+         {
+            return;
+         }
+         updatesChecked = true;
+         loadText("channel.txt",function(param1:String):void
+         {
+            channel = param1.indexOf("beta") >= 0 ? "beta" : "release";
+         },null);
+         var stamp:String = "?t=" + new Date().time;
+         loadText(REPO_RAW + "main/version.txt" + stamp,function(param1:String):void
+         {
+            latest.release = param1.replace(/\s+/g,"");
+         },function():void
+         {
+            latest.release = "?";
+         });
+         loadText(REPO_RAW + "working-tree/version.txt" + stamp,function(param1:String):void
+         {
+            latest.beta = param1.replace(/\s+/g,"");
+         },function():void
+         {
+            latest.beta = "?";
+         });
+      }
+
+      public static function loadText(param1:String, param2:Function, param3:Function) : void
+      {
+         var done:Function = param2;
+         var failed:Function = param3;
+         var loader:URLLoader = new URLLoader();
+         var fail:Function = function(param1:Event):void
+         {
+            if(failed != null)
+            {
+               failed();
+            }
+         };
+         loader.addEventListener(Event.COMPLETE,function(param1:Event):void
+         {
+            done(String(loader.data));
+         });
+         loader.addEventListener(IOErrorEvent.IO_ERROR,fail);
+         loader.addEventListener(SecurityErrorEvent.SECURITY_ERROR,fail);
+         try
+         {
+            loader.load(new URLRequest(param1));
+         }
+         catch(e:Error)
+         {
+            fail(null);
+         }
+      }
+
+      public function versionText(param1:String) : String
+      {
+         var v:String = latest[param1];
+         return v == "" ? "..." : (v == "?" ? "(CAN'T CHECK)" : "V" + v);
+      }
+
+      public function updatesLine() : String
+      {
+         return "INSTALLED: V" + MOD_VERSION + " " + channelName(channel);
+      }
+
+      public function updatesScreen() : Array
+      {
+         var title:GameObject = txt("UPDATES",32);
+         title.helper.addBacking();
+         title.vars["backing"].baseAlpha = 0.6;
+         updatesInfo = txt(updatesLine(),16);
+         releaseButton = addButton("UPDATE_RELEASE");
+         betaButton = addButton("UPDATE_BETA");
+         var back:GameObject = addButton("BACK");
+         updatesShown = "";
+         refreshUpdatesScreen();
+         var all:Array = [title,updatesInfo,releaseButton,betaButton,back];
+         vert(all,8,400,globalMenuY);
+         LayerFilter.applySlideIn(all);
+         return all;
+      }
+
+      public function refreshUpdatesScreen() : void
+      {
+         var key:String = updatesLine() + versionText("release") + versionText("beta");
+         if(key == updatesShown || !releaseButton)
+         {
+            return;
+         }
+         updatesShown = key;
+         updatesInfo.setText(updatesLine());
+         releaseButton.setButtonText("RELEASE " + versionText("release"));
+         betaButton.setButtonText("BETA " + versionText("beta"));
+      }
+
+      public function confirmScreen() : Array
+      {
+         var v:String = latest[pendingChannel];
+         var target:String = channelName(pendingChannel) + " " + (v == "" || v == "?" ? "(LATEST VERSION)" : "V" + v);
+         var question:String = confirmIsUpdate ? "UPDATE AVAILABLE: " + target + ". INSTALL IT?" : (pendingChannel == channel && !newerAvailable(pendingChannel) ? "REINSTALL " + target + "?" : "SWITCH TO " + target + "?");
+         var q:GameObject = txt(question,20);
+         q.helper.addBacking();
+         q.vars["backing"].baseAlpha = 0.6;
+         confirmText = txt("THE GAME WILL CLOSE, DOWNLOAD IT AND RESTART.",16);
+         var yes:GameObject = addButton("UPDATE_YES");
+         yes.setButtonText("YES, RESTART");
+         var no:GameObject = addButton("UPDATE_NO");
+         no.setButtonText(confirmIsUpdate ? "LATER" : "NO");
+         var all:Array = [q,confirmText,yes,no];
+         vert(all,10,400,globalMenuY);
+         LayerFilter.applySlideIn(all);
+         return all;
+      }
+
+      // Starts fscommand\update<channel>.exe (after checking it's there, since quitting without it would just
+      // close the game) and quits so it can replace the exe. Flash ignores exec names with a hyphen.
+      public function runUpdater(param1:String) : void
+      {
+         var file:String = "update" + param1 + ".exe";
+         if(Capabilities.playerType != "StandAlone")
+         {
+            confirmText.setText("UPDATES ONLY WORK IN THE CO-OP EXE.");
+            return;
+         }
+         var bin:URLLoader = new URLLoader();
+         bin.dataFormat = URLLoaderDataFormat.BINARY;
+         bin.addEventListener(Event.COMPLETE,function(param1:Event):void
+         {
+            fscommand("exec",file);
+            quitAt = Ticks + 40;
+            confirmText.setText("STARTING THE UPDATER...");
+         });
+         bin.addEventListener(IOErrorEvent.IO_ERROR,function(param1:Event):void
+         {
+            confirmText.setText("THE UPDATER IS MISSING (FSCOMMAND FOLDER).");
+         });
+         try
+         {
+            bin.load(new URLRequest("fscommand/" + file));
+         }
+         catch(e:Error)
+         {
+            confirmText.setText("THE UPDATER IS MISSING (FSCOMMAND FOLDER).");
+         }
       }
       
       public static function setMusic() : void
@@ -268,6 +477,7 @@ package Scenes
          var _loc1_:Array = new Array();
          _loc1_.push(addButton("START"));
          _loc1_.push(addButton("JOIN ONLINE"));
+         _loc1_.push(addButton("UPDATES"));
          _loc1_.push(addButton("OPTIONS"));
          _loc1_.push(addButton("CREDITS"));
          vert(_loc1_,8,400,300);
@@ -576,6 +786,43 @@ package Scenes
          if(layer.buttonHit("JOIN ONLINE"))
          {
             layer.push(joinOnline);
+         }
+         if(layer.buttonHit("UPDATES"))
+         {
+            layer.push(updatesScreen);
+         }
+         if(releaseButton && !releaseButton._removed)
+         {
+            refreshUpdatesScreen();
+         }
+         // (buttonHit only reports a click once, so read each button once.)
+         var pickRelease:Boolean = layer.buttonHit("UPDATE_RELEASE");
+         var pickBeta:Boolean = layer.buttonHit("UPDATE_BETA");
+         if(pickRelease || pickBeta)
+         {
+            pendingChannel = pickBeta ? "beta" : "release";
+            confirmIsUpdate = false;
+            layer.push(confirmScreen);
+         }
+         // A newer version on the installed channel: offer it once, on the title screen.
+         if(!updatePrompted && newerAvailable(channel) && layer.getButton("START"))
+         {
+            updatePrompted = true;
+            pendingChannel = channel;
+            confirmIsUpdate = true;
+            layer.push(confirmScreen);
+         }
+         if(layer.buttonHit("UPDATE_YES") && quitAt == 0)
+         {
+            runUpdater(pendingChannel);
+         }
+         if(layer.buttonHit("UPDATE_NO"))
+         {
+            layer.pop();
+         }
+         if(quitAt > 0 && Ticks >= quitAt)
+         {
+            fscommand("quit");
          }
          // For testing online play: online.txt "autostart=1" jumps straight into mission 1 on the first save.
          if(Ticks == 60 && Net.config["autostart"])

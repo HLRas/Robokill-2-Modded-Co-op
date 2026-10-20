@@ -34,6 +34,8 @@ package PremiumContent
       public var layer:GUILayer;
       
       public var offsetDone:Boolean = false;
+
+      public var versionShown:String = "";
       
       public var child:GameObject;
       
@@ -146,12 +148,19 @@ package PremiumContent
                registeredText.obj.filters = [];
                registeredText.basey += 12;
                --registeredTo.basex;
-               // The line under "Cracked by" shows the co-op mod's version.
-               _loc2_ = "CO-OP MOD V" + MainMenu.MOD_VERSION;
+               // The line under "Cracked by" shows the co-op mod's version (and BETA on the beta channel).
+               _loc2_ = MainMenu.versionLabel();
                registeredTo.fontName = "Pixelation-34";
                registeredTo.setText(_loc2_,7,4473924);
                registeredTo.obj.filters = [];
+               versionShown = _loc2_;
                offsetDone = true;
+            }
+            else if(versionShown != MainMenu.versionLabel())
+            {
+               versionShown = MainMenu.versionLabel();
+               registeredTo.setText(versionShown,7,4473924);
+               registeredTo.obj.filters = [];
             }
          }
          if(panel)

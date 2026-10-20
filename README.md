@@ -6,7 +6,16 @@ Two-player local co-op and controller support for the Flash game *Robokill 2: Le
 
 Run **`Robokill 2 (Co-op).exe`**. It bundles the Adobe Flash Player 32 projector, so nothing needs to be installed.
 
-The title screen shows the mod version (**CO-OP MOD V1.0**, then V1.01, V1.02, … with each update). Online play needs the same version on both PCs.
+The title screen shows the mod version (**CO-OP MOD V1.0**, then V1.01, V1.02, … with each update; **BETA** on the beta channel). Online play needs the same version on both PCs.
+
+### Updates
+
+Keep the exe together with the `fscommand` folder (it holds the updater).
+
+- **RELEASE** is the `main` branch; **BETA** is the `working-tree` branch, with newer but less tested changes.
+- **UPDATES** on the title screen shows what you have installed and the latest release and beta. Pick one to switch to it (or reinstall it). After you confirm, the game closes, the updater downloads that version from GitHub, and the game restarts.
+- If your channel has a newer version, the title screen offers it when the game starts.
+- The updater only replaces `Robokill 2 (Co-op).exe` and writes `channel.txt`. Saves aren't touched.
 
 ### Who controls what
 
@@ -101,6 +110,8 @@ Notes:
 | `src/` | Decompiled game: ActionScript in `scripts/`, plus images, sounds and fonts |
 | `build/` | Build script and the list of modified classes |
 | `relay/` | Online co-op relay server and setup guide |
+| `fscommand/`, `updater/` | The updater the game starts (built from `updater/Updater.cs`), and its source |
+| `version.txt` | The mod version, read from GitHub by the updater (written by the build) |
 | `online.txt` | Which relay server online co-op uses |
 
 Main mod code: `src/scripts/Tools/Input.as` (controllers, crosshairs), `src/scripts/ObjectBase/PlayerBase.as` (player 2, lock-on, full-charge indicator), `src/scripts/Scenes/MainScene.as` (co-op logic: join, respawn, targeting), `src/scripts/Scenes/MainMenu.as` (cheat code, join screen), `src/scripts/Tools/Net.as` (online co-op).

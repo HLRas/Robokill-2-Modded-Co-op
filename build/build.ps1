@@ -50,3 +50,19 @@ $fs = [System.IO.File]::Create($exe)
 $fs.Write($proj, 0, $proj.Length); $fs.Write($swfBytes, 0, $swfBytes.Length); $fs.Write($trailer, 0, $trailer.Length)
 $fs.Close()
 Write-Host "Built $exe"
+
+# version.txt: the mod version (MOD_VERSION in MainMenu.as), read from GitHub by the game and the updater.
+$menu = Get-Content (Join-Path $root 'src\scripts\Scenes\MainMenu.as') -Raw
+if ($menu -notmatch 'MOD_VERSION:String = "([^"]+)"') { throw 'MOD_VERSION not found in MainMenu.as' }
+[System.IO.File]::WriteAllText((Join-Path $root 'version.txt'), $Matches[1])
+Write-Host "Version $($Matches[1])"
+
+# The updater: fscommand\updaterelease.exe and updatebeta.exe (the game can only start programs in that folder,
+# and Flash ignores names with a hyphen).
+$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+$fsc = Join-Path $root 'fscommand'
+New-Item -ItemType Directory -Force $fsc | Out-Null
+$updaterExe = Join-Path $fsc 'updaterelease.exe'
+& $csc /nologo /optimize "/out:$updaterExe" (Join-Path $root 'updater\Updater.cs')
+if ($LASTEXITCODE -ne 0) { throw 'Updater did not compile' }
+Copy-Item (Join-Path $fsc 'updaterelease.exe') (Join-Path $fsc 'updatebeta.exe') -Force

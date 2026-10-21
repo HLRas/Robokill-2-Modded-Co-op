@@ -2366,6 +2366,7 @@ package ObjectBase
          var _loc25_:Array = null;
          if(partner)
          {
+            Net.player2Tick();
             _loc25_ = swapP2Charges(null);
             useP2Items();
             if(p2Bar)

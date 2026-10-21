@@ -11,6 +11,7 @@ package GameLevels
    import Scenes.*;
    import Templates.RewardText;
    import Tools.GraphicsTools;
+   import Tools.Net;
    import Tools.PathfindSquare;
    import Tools.Random;
    import flash.display.*;
@@ -535,6 +536,8 @@ package GameLevels
             }
          }
          _loc11_ = GraphicsTools.createFilledSprite(800,600,4294967295);
+         // Online: the floor's draw calls are recorded, so the guest can build it instead of getting its pixels.
+         Net.recordStart(_loc11_.bitmapData,4294967295);
          _loc12_ = new Embeds.floor_base_jpg();
          floorBitmapData = _loc12_.bitmapData;
          _loc13_ = MainScene(gs).currentEpisode;
@@ -605,14 +608,14 @@ package GameLevels
                      _loc26_ = _loc7_[_loc8_][_loc9_];
                      _loc26_.x = _loc9_ * 52 + 10;
                      _loc26_.y = _loc8_ * 52 + 14;
-                     _loc11_.bitmapData.draw(_loc26_,_loc26_.transform.matrix);
+                     Net.recordDraw(_loc11_.bitmapData,_loc26_,_loc26_.transform.matrix);
                   }
                }
                _loc8_++;
             }
             _loc9_++;
          }
-         _loc11_.bitmapData.draw(_loc12_,null,_loc16_,BlendMode.MULTIPLY);
+         Net.recordDraw(_loc11_.bitmapData,_loc12_,null,_loc16_,BlendMode.MULTIPLY);
          var _loc17_:Array = [0,0,0,0,1,1,1,1,2,2,2,2];
          var _loc18_:Bitmap = new Bitmap(Embeds.pit[_loc17_[MainScene(gs).currentEpisode]]);
          _loc9_ = 0;
@@ -623,7 +626,7 @@ package GameLevels
             {
                if(floorPos[_loc8_][_loc9_] == -1)
                {
-                  _loc11_.bitmapData.draw(_loc18_,null,null,null,new Rectangle(_loc9_ * 52 + 10,_loc8_ * 52 + 14,52,52));
+                  Net.recordDraw(_loc11_.bitmapData,_loc18_,null,null,null,new Rectangle(_loc9_ * 52 + 10,_loc8_ * 52 + 14,52,52));
                }
                _loc8_++;
             }
@@ -636,7 +639,7 @@ package GameLevels
                _loc10_.syncObj(true);
                if(Bitmap(_loc10_.obj).bitmapData)
                {
-                  _loc11_.bitmapData.draw(Bitmap(_loc10_.obj).bitmapData,_loc10_.obj.transform.matrix,new ColorTransform(_loc10_.baseBrightness,_loc10_.baseBrightness,_loc10_.baseBrightness,_loc10_.baseAlpha),_loc10_.additive ? BlendMode.ADD : BlendMode.NORMAL,null,true);
+                  Net.recordDraw(_loc11_.bitmapData,Bitmap(_loc10_.obj).bitmapData,_loc10_.obj.transform.matrix,new ColorTransform(_loc10_.baseBrightness,_loc10_.baseBrightness,_loc10_.baseBrightness,_loc10_.baseAlpha),_loc10_.additive ? BlendMode.ADD : BlendMode.NORMAL,null,true,_loc10_.obj);
                }
                if(_loc10_.animFrame == 11 || _loc10_.animFrame == 12 || _loc10_.animFrame >= 26 && _loc10_.animFrame <= 29 || _loc10_.animFrame >= 56 && _loc10_.animFrame <= 62 && _loc10_.animFrame != 58 || _loc10_.animFrame == 73 || _loc10_.animFrame >= 79 && _loc10_.animFrame <= 86 && _loc10_.animFrame != 80 && _loc10_.animFrame != 86 && _loc10_.animFrame != 83 && _loc10_.animFrame != 82)
                {
@@ -667,7 +670,7 @@ package GameLevels
                _loc10_.baseHandleX = 0;
                _loc10_.baseHandleY = 0;
                _loc10_.syncObj(true);
-               _loc11_.bitmapData.draw(_loc14_,_loc10_.obj.transform.matrix);
+               Net.recordDraw(_loc11_.bitmapData,_loc14_,_loc10_.obj.transform.matrix);
                _loc8_++;
             }
             _loc9_++;
@@ -675,10 +678,10 @@ package GameLevels
          _loc10_.remove();
          _loc2_ = MainScene(gs).player;
          var _loc19_:int = 256;
-         _loc11_.bitmapData.draw(_loc18_,null,null,null,new Rectangle(0,0,startx,600));
-         _loc11_.bitmapData.draw(_loc18_,null,null,null,new Rectangle(endx,0,_loc19_,600));
-         _loc11_.bitmapData.draw(_loc18_,null,null,null,new Rectangle(0,0,800,starty));
-         _loc11_.bitmapData.draw(_loc18_,null,null,null,new Rectangle(0,endy,800,_loc19_));
+         Net.recordDraw(_loc11_.bitmapData,_loc18_,null,null,null,new Rectangle(0,0,startx,600));
+         Net.recordDraw(_loc11_.bitmapData,_loc18_,null,null,null,new Rectangle(endx,0,_loc19_,600));
+         Net.recordDraw(_loc11_.bitmapData,_loc18_,null,null,null,new Rectangle(0,0,800,starty));
+         Net.recordDraw(_loc11_.bitmapData,_loc18_,null,null,null,new Rectangle(0,endy,800,_loc19_));
          nofloorstartx = startx;
          nofloorstarty = starty;
          nofloorendx = endx;
@@ -695,7 +698,7 @@ package GameLevels
                _loc10_.syncObj(true);
                if(Bitmap(_loc10_.obj).bitmapData)
                {
-                  _loc11_.bitmapData.draw(Bitmap(_loc10_.obj).bitmapData,_loc10_.obj.transform.matrix,new ColorTransform(_loc10_.baseBrightness,_loc10_.baseBrightness,_loc10_.baseBrightness,_loc10_.baseAlpha),_loc10_.additive ? BlendMode.ADD : BlendMode.NORMAL,null,true);
+                  Net.recordDraw(_loc11_.bitmapData,Bitmap(_loc10_.obj).bitmapData,_loc10_.obj.transform.matrix,new ColorTransform(_loc10_.baseBrightness,_loc10_.baseBrightness,_loc10_.baseBrightness,_loc10_.baseAlpha),_loc10_.additive ? BlendMode.ADD : BlendMode.NORMAL,null,true,_loc10_.obj);
                }
                _loc10_.remove();
             }

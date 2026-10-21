@@ -194,12 +194,15 @@ package Scenes
       public function applyToFloor(param1:Array) : *
       {
          var _loc3_:Array = null;
+         var _loc4_:Rectangle = null;
          floorMarks = param1[0];
          var _loc2_:int = 0;
          while(_loc2_ < floorMarks.length)
          {
             _loc3_ = floorMarks[_loc2_];
-            floor.drawToImage(_loc3_[0],_loc3_[1],_loc3_[2],_loc3_[3],_loc3_[4],_loc3_[5],BlendMode.NORMAL,new Rectangle(nofloorstartx,nofloorstarty,nofloorendx - nofloorstartx,nofloorendy - nofloorstarty),[_loc3_[6],_loc3_[7],_loc3_[8],1]);
+            _loc4_ = new Rectangle(nofloorstartx,nofloorstarty,nofloorendx - nofloorstartx,nofloorendy - nofloorstarty);
+            floor.drawToImage(_loc3_[0],_loc3_[1],_loc3_[2],_loc3_[3],_loc3_[4],_loc3_[5],BlendMode.NORMAL,_loc4_,[_loc3_[6],_loc3_[7],_loc3_[8],1]);
+            Net.recordMark(floor,_loc3_[0],_loc3_[1],_loc3_[2],_loc3_[3],_loc3_[4],_loc3_[5],BlendMode.NORMAL,_loc4_,[_loc3_[6],_loc3_[7],_loc3_[8],1]);
             _loc2_++;
          }
       }
@@ -1245,7 +1248,9 @@ package Scenes
             }
             _loc10_++;
          }
-         floor.drawToImage(param1,param2,param3,param4,param5,param6,BlendMode.NORMAL,new Rectangle(nofloorstartx,nofloorstarty,nofloorendx - nofloorstartx,nofloorendy - nofloorstarty),[param7,param8,param9,1]);
+         var _loc18_:Rectangle = new Rectangle(nofloorstartx,nofloorstarty,nofloorendx - nofloorstartx,nofloorendy - nofloorstarty);
+         floor.drawToImage(param1,param2,param3,param4,param5,param6,BlendMode.NORMAL,_loc18_,[param7,param8,param9,1]);
+         Net.recordMark(floor,param1,param2,param3,param4,param5,param6,BlendMode.NORMAL,_loc18_,[param7,param8,param9,1]);
          floorMarks.push([param1,param2,param3,param4,param5,param6,param7,param8,param9]);
       }
       

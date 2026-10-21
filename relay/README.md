@@ -50,7 +50,7 @@ Both copies share the same save file, so back up `robokill2.sol` first (see the 
 
 Testing aids:
 
-- `online.txt`: `stats=1` shows the F8 stats from the start; `testpad=1` (guest) walks Player 2 in circles and fires, so you can watch online play without a second person.
+- `online.txt`: `stats=1` shows the F8 stats from the start; `testpad=1` (guest) walks Player 2 around (walk, stop, half stick, circle) and fires, so you can watch online play without a second person; `testpad=2` only walks (firing also clicks menus, e.g. opens the shop).
 - Relay: `--delay MS` and `--jitter MS` add network delay each way (order is kept, as with TCP); `--rate KB` limits each direction to that many KB/s, with a queue in front like a home router. With `--stats` and `--rate`, the log shows the worst queue delay to the guest, which is the lag that builds up.
 
 ```sh

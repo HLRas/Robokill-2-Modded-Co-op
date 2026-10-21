@@ -14,6 +14,7 @@ package Tools
    import flash.display.DisplayObject;
    import flash.display.DisplayObjectContainer;
    import flash.display.Graphics;
+   import flash.display.IBitmapDrawable;
    import flash.display.IGraphicsData;
    import flash.display.Shape;
    import flash.display.SimpleButton;
@@ -50,6 +51,7 @@ package Tools
    import flash.utils.Dictionary;
    import flash.utils.describeType;
    import flash.utils.getDefinitionByName;
+   import flash.system.ApplicationDomain;
    import flash.utils.getQualifiedClassName;
    import flash.utils.getTimer;
 
@@ -129,6 +131,18 @@ package Tools
       private static const D_CHUNK:int = 10;
 
       private static const CHUNK_SIZE:int = 4096;
+
+      // A picture built by draw calls (a room's floor): its size, fill colour, the names of the pictures it draws
+      // from, and the calls. The guest replays them instead of getting the pixels.
+      private static const D_RECIPE:int = 11;
+
+      // One more draw call (a floor mark) on a picture made from a recipe.
+      private static const D_FLOOROP:int = 12;
+
+      // A picture of a single colour (screen-fade and menu backings): size and colour.
+      private static const D_FILL:int = 13;
+
+      private static const SNAPS:Array = ["auto","never","always"];
 
       private static const BLENDS:Array = [BlendMode.NORMAL,BlendMode.ADD,BlendMode.MULTIPLY,BlendMode.SCREEN,BlendMode.LIGHTEN,BlendMode.DARKEN,BlendMode.OVERLAY,BlendMode.HARDLIGHT,BlendMode.DIFFERENCE,BlendMode.SUBTRACT,BlendMode.INVERT,BlendMode.ALPHA,BlendMode.ERASE];
 
@@ -246,6 +260,15 @@ package Tools
 
       private static var appliedSeq:int = 0;
 
+      // Host: game ticks (10 ms each) run since the game first read that input. Counted in ticks rather than
+      // milliseconds: the game runs at most 5 ticks per timer event and none while paused, so its time can fall
+      // behind the clock.
+      private static var p2Ticks:int = 0;
+
+      private static var appliedTick:int = 0;
+
+      private static var p2TickAt:int = 0;
+
       // Guest: the inputs sent ({seq, t, mx, my}: move values as the host's PlayerBase will see them), and the
       // aim direction.
       private static var inputSeq:int = 0;
@@ -274,6 +297,8 @@ package Tools
 
       private static var p2PredFrom:Object = null;
 
+      private static var p2LastAt:int = 0;
+
       private static var lastP2:Object = null;
 
       // Guest stats: how far the drawn player 2 was from where the host later had it, with and without prediction.
@@ -283,6 +308,9 @@ package Tools
 
       private static var lagErr:Number = 0;
 
+      // Guest stats: average jump of the prediction when a new host frame arrives (what shows as rubber banding).
+      private static var predCorr:Number = 0;
+
       // The game's shared pictures (Embeds' static BitmapData) by name, and each embedded picture class's original
       // pixels: pictures the guest's copy of the game already has are sent by name instead of pixels.
       private static var staticNames:Dictionary;
@@ -291,6 +319,9 @@ package Tools
 
       // Text pictures: their text and layout, sent instead of pixels.
       private static var textDescs:Dictionary = new Dictionary(true);
+
+      // Host: draw calls recorded for pictures the game builds (room floors), by BitmapData.
+      private static var recipes:Dictionary = new Dictionary(true);
 
       // ---- stats (F8) ----
       private static var statsOn:Boolean = false;
@@ -512,6 +543,13 @@ package Tools
          player2At = getTimer();
       }
 
+      // Called by player 2's PlayerBase._update, once per game tick it moves.
+      public static function player2Tick() : void
+      {
+         ++p2Ticks;
+         p2TickAt = getTimer();
+      }
+
       public static function takeGuestLeft() : Boolean
       {
          var _loc1_:Boolean = guestLeft;
@@ -526,6 +564,10 @@ package Tools
          if(mode == 1)
          {
             return;
+         }
+         if(!staticNames)
+         {
+            buildStaticNames();
          }
          mode = 1;
          status = "CONNECTING...";
@@ -800,6 +842,11 @@ package Tools
             else
             {
                status = "CONNECTED";
+               // Warm-up: load every picture the host may refer to by name.
+               if(!staticNames)
+               {
+                  buildStaticNames();
+               }
                startMirror();
             }
          }
@@ -906,30 +953,68 @@ package Tools
          }
       }
 
+      // Every static picture in the game's classes (Embeds and the ObjectConstructors' animation frames), named
+      // "class#variable", so a picture the guest's copy of the game also has is sent by name. Touching them all
+      // also loads them, so on both sides this is the warm-up when online play starts.
       private static function buildStaticNames() : void
       {
          var v:XML = null;
          var bd:BitmapData = null;
+         var n:String = null;
+         var cls:Class = null;
          staticNames = new Dictionary();
+         var names:Object = null;
          try
          {
-            var E:Class = getDefinitionByName("GlobalSetup.Embeds") as Class;
-            var x:XML = describeType(E);
-            for each(v in x.variable)
+            names = ApplicationDomain.currentDomain.getQualifiedDefinitionNames();
+         }
+         catch(e:Error)
+         {
+            names = ["GlobalSetup::Embeds"];
+         }
+         for each(n in names)
+         {
+            if(n != "GlobalSetup::Embeds" && n.indexOf("ObjectConstructors::") != 0)
             {
-               if(String(v.@type) == "flash.display::BitmapData")
+               continue;
+            }
+            try
+            {
+               cls = getDefinitionByName(n) as Class;
+               if(!cls)
                {
-                  bd = E[String(v.@name)] as BitmapData;
-                  if(bd)
+                  continue;
+               }
+               for each(v in describeType(cls).variable)
+               {
+                  if(String(v.@type) == "flash.display::BitmapData")
                   {
-                     staticNames[bd] = String(v.@name);
+                     bd = cls[String(v.@name)] as BitmapData;
+                     if(bd && !staticNames[bd])
+                     {
+                        staticNames[bd] = n + "#" + String(v.@name);
+                     }
                   }
                }
             }
+            catch(e:Error)
+            {
+            }
+         }
+      }
+
+      // A static picture by its "class#variable" name.
+      private static function resolveStatic(param1:String) : BitmapData
+      {
+         var i:int = param1.indexOf("#");
+         try
+         {
+            return (getDefinitionByName(param1.substr(0,i)) as Class)[param1.substr(i + 1)] as BitmapData;
          }
          catch(e:Error)
          {
          }
+         return null;
       }
 
       private static function canSendFrame() : Boolean
@@ -1084,7 +1169,8 @@ package Tools
          p2Oids.length = 0;
          p2CursorOid = 0;
          var p:PlayerBase = player2;
-         if(!p || getTimer() - player2At > 250 || p._removed || p.falling || p.beforeTeleporting() || config["predict"] == "0")
+         // Also not while player 2 isn't being updated (a comms message or the game is paused): it can't move.
+         if(!p || getTimer() - player2At > 250 || getTimer() - p2TickAt > 60 || p._removed || p.falling || p.beforeTeleporting() || config["predict"] == "0")
          {
             return;
          }
@@ -1121,6 +1207,16 @@ package Tools
          {
             markObjects(c,param2);
          }
+         // Shadows and other helper-made children live here, not in children.
+         var cc:Object = param1.vars ? param1.vars["conditionalChildren"] : null;
+         var k:String = null;
+         for(k in cc)
+         {
+            if(cc[k] is GameObject)
+            {
+               markObjects(GameObject(cc[k]),param2);
+            }
+         }
       }
 
       private static function markDisplay(param1:DisplayObject, param2:int) : void
@@ -1155,6 +1251,7 @@ package Tools
          param1.writeFloat(p.dx);
          param1.writeFloat(p.dy);
          param1.writeShort(appliedSeq);
+         param1.writeShort(Math.min(65535,(p2Ticks - appliedTick) * 10));
          param1.writeByte((p.canMoveX() ? 1 : 0) | (p.canMoveY() ? 2 : 0));
          param1.writeShort(ms ? ms.startx : 0);
          param1.writeShort(ms ? ms.endx : 800);
@@ -1503,10 +1600,16 @@ package Tools
       // the original), otherwise its pixels.
       private static function registerImage(param1:Object, param2:BitmapData, param3:DisplayObject) : void
       {
+         var rec:Object = recipes[param2];
+         if(rec)
+         {
+            sendRecipe(param1,param2,rec);
+            return;
+         }
          var name:String = staticNames ? staticNames[param2] : null;
          if(name)
          {
-            sendRef(param1.id,1,name);
+            sendRef(param1.id,3,name);
             param1.copy = param2.clone();
             return;
          }
@@ -1546,7 +1649,369 @@ package Tools
             sendData(D_TEXT,tb);
             return;
          }
+         // One colour all over (fade and menu backings): just the colour.
+         if(param2.width * param2.height >= 4096)
+         {
+            var c:uint = param2.getPixel32(0,0);
+            var other:Rectangle = param2.getColorBoundsRect(4294967295,c,false);
+            if(other.width == 0 || other.height == 0)
+            {
+               var fb:ByteArray = new ByteArray();
+               writeVar(fb,param1.id);
+               fb.writeShort(param2.width);
+               fb.writeShort(param2.height);
+               fb.writeByte(param2.transparent ? 1 : 0);
+               fb.writeUnsignedInt(c);
+               queueBulk(D_FILL,fb);
+               param1.copy = param2.clone();
+               return;
+            }
+         }
          sendImage(param1.id,param2,param2.rect,true);
+      }
+
+      // ---------------- recorded pictures (room floors) ----------------
+
+      // Called by GameLevel.getFloor when it creates a room's floor picture.
+      public static function recordStart(param1:BitmapData, param2:uint) : void
+      {
+         if(mode != 1)
+         {
+            return;
+         }
+         recipes[param1] = {
+            w:param1.width,
+            h:param1.height,
+            tr:param1.transparent,
+            fill:param2,
+            ops:[]
+         };
+      }
+
+      // GameLevel.getFloor's draw calls go through here: the draw, plus a record of it when hosting. param8 is the
+      // display object a BitmapData source belongs to, to name it by its embedded class.
+      public static function recordDraw(param1:BitmapData, param2:IBitmapDrawable, param3:Matrix = null, param4:ColorTransform = null, param5:String = null, param6:Rectangle = null, param7:Boolean = false, param8:DisplayObject = null) : void
+      {
+         param1.draw(param2,param3,param4,param5,param6,param7);
+         var rec:Object = recipes[param1];
+         if(!rec)
+         {
+            return;
+         }
+         // A source that can't be named is left out: the host's check after replaying sends that area as pixels.
+         var name:String = sourceName(param2,param8);
+         if(!name)
+         {
+            return;
+         }
+         var bmp:Bitmap = param2 as Bitmap;
+         rec.ops.push({
+            t:1,
+            name:name,
+            bmp:bmp != null,
+            snap:bmp ? bmp.pixelSnapping : "auto",
+            bsmooth:bmp ? bmp.smoothing : false,
+            m:param3 ? param3.clone() : null,
+            ct:param4 ? new ColorTransform(param4.redMultiplier,param4.greenMultiplier,param4.blueMultiplier,param4.alphaMultiplier,param4.redOffset,param4.greenOffset,param4.blueOffset,param4.alphaOffset) : null,
+            blend:param5,
+            clip:param6 ? param6.clone() : null,
+            smooth:param7
+         });
+      }
+
+      // Called by MainScene after a floor mark (floor.drawToImage): recorded, and sent at once if the guest has
+      // the floor already.
+      public static function recordMark(param1:GameObject, param2:BitmapData, param3:Number, param4:Number, param5:int, param6:Number, param7:Number, param8:String, param9:Rectangle, param10:Array) : void
+      {
+         var target:BitmapData = param1 && param1.obj is Bitmap ? Bitmap(param1.obj).bitmapData : null;
+         var rec:Object = target ? recipes[target] : null;
+         if(!rec)
+         {
+            return;
+         }
+         var name:String = sourceName(param2,null);
+         if(!name)
+         {
+            return;
+         }
+         var op:Object = {
+            t:2,
+            name:name,
+            x:param3,
+            y:param4,
+            rot:param5,
+            sx:param6,
+            sy:param7,
+            blend:param8,
+            clip:param9 ? param9.clone() : null,
+            tint:param10 ? param10.concat() : null,
+            bx:param1.basex,
+            by:param1.basey
+         };
+         rec.ops.push(op);
+         var info:Object = imgInfo[target];
+         if(mode == 1 && peer && info && info.copy)
+         {
+            var b:ByteArray = new ByteArray();
+            writeVar(b,info.id);
+            writeOps(b,[op]);
+            queueBulk(D_FLOOROP,b);
+            // Keep the host's copy of what the guest has in step, so the change check finds nothing to resend.
+            b.position = 0;
+            readVar(b);
+            replayOps(info.copy,b);
+         }
+      }
+
+      // The name of a picture the guest's copy also has: a static picture, or an embedded class's untouched
+      // picture.
+      private static function sourceName(param1:Object, param2:DisplayObject) : String
+      {
+         var bd:BitmapData = param1 is Bitmap ? Bitmap(param1).bitmapData : param1 as BitmapData;
+         if(!bd)
+         {
+            return null;
+         }
+         if(!staticNames)
+         {
+            buildStaticNames();
+         }
+         if(staticNames[bd])
+         {
+            return "S" + staticNames[bd];
+         }
+         var disp:DisplayObject = param1 is Bitmap ? DisplayObject(param1) : param2;
+         var cls:String = disp is Bitmap ? getQualifiedClassName(disp) : null;
+         if(cls && cls.indexOf("::Embeds_") > 0)
+         {
+            var orig:BitmapData = classOriginal(cls);
+            if(orig && orig.width == bd.width && orig.height == bd.height && (orig == bd || orig.compare(bd) === 0))
+            {
+               return "K" + cls;
+            }
+         }
+         return null;
+      }
+
+      private static function resolveSource(param1:String) : BitmapData
+      {
+         if(param1.charAt(0) == "S")
+         {
+            return resolveStatic(param1.substr(1));
+         }
+         return classOriginal(param1.substr(1));
+      }
+
+      // Names table, then the calls.
+      private static function writeOps(param1:ByteArray, param2:Array) : void
+      {
+         var names:Array = [];
+         var index:Object = {};
+         var op:Object = null;
+         for each(op in param2)
+         {
+            if(index[op.name] === undefined)
+            {
+               index[op.name] = names.length;
+               names.push(op.name);
+            }
+         }
+         writeVar(param1,names.length);
+         var n:String = null;
+         for each(n in names)
+         {
+            param1.writeUTF(n);
+         }
+         writeVar(param1,param2.length);
+         var fl:int = 0;
+         for each(op in param2)
+         {
+            param1.writeByte(op.t);
+            writeVar(param1,index[op.name]);
+            if(op.t == 1)
+            {
+               fl = (op.bmp ? 1 : 0) | (op.bsmooth ? 2 : 0) | (op.m ? 4 : 0) | (op.ct ? 8 : 0) | (op.clip ? 16 : 0) | (op.smooth ? 32 : 0);
+               param1.writeByte(fl);
+               param1.writeByte(Math.max(0,SNAPS.indexOf(op.snap)));
+               param1.writeByte(op.blend ? Math.max(0,BLENDS.indexOf(op.blend)) : 255);
+               if(op.m)
+               {
+                  param1.writeDouble(op.m.a);
+                  param1.writeDouble(op.m.b);
+                  param1.writeDouble(op.m.c);
+                  param1.writeDouble(op.m.d);
+                  param1.writeDouble(op.m.tx);
+                  param1.writeDouble(op.m.ty);
+               }
+               if(op.ct)
+               {
+                  param1.writeDouble(op.ct.redMultiplier);
+                  param1.writeDouble(op.ct.greenMultiplier);
+                  param1.writeDouble(op.ct.blueMultiplier);
+                  param1.writeDouble(op.ct.alphaMultiplier);
+                  param1.writeDouble(op.ct.redOffset);
+                  param1.writeDouble(op.ct.greenOffset);
+                  param1.writeDouble(op.ct.blueOffset);
+                  param1.writeDouble(op.ct.alphaOffset);
+               }
+            }
+            else
+            {
+               fl = (op.clip ? 16 : 0) | (op.tint ? 64 : 0);
+               param1.writeByte(fl);
+               param1.writeDouble(op.x);
+               param1.writeDouble(op.y);
+               param1.writeInt(op.rot);
+               param1.writeDouble(op.sx);
+               param1.writeDouble(op.sy);
+               param1.writeByte(op.blend ? Math.max(0,BLENDS.indexOf(op.blend)) : 255);
+               param1.writeDouble(op.bx);
+               param1.writeDouble(op.by);
+               if(op.tint)
+               {
+                  param1.writeByte(op.tint.length);
+                  var tv:Number = NaN;
+                  for each(tv in op.tint)
+                  {
+                     param1.writeDouble(tv);
+                  }
+               }
+            }
+            if(op.clip)
+            {
+               param1.writeDouble(op.clip.x);
+               param1.writeDouble(op.clip.y);
+               param1.writeDouble(op.clip.width);
+               param1.writeDouble(op.clip.height);
+            }
+         }
+      }
+
+      // Reads a names table and calls (as written by writeOps) and draws them onto param1. Used by the guest, and
+      // by the host for its copy, so both run exactly the same code on exactly the same numbers.
+      private static function replayOps(param1:BitmapData, param2:ByteArray) : void
+      {
+         var names:Array = [];
+         var n:int = readVar(param2);
+         while(n-- > 0)
+         {
+            names.push(param2.readUTF());
+         }
+         var sources:Array = [];
+         n = readVar(param2);
+         var t:int = 0;
+         var src:BitmapData = null;
+         var fl:int = 0;
+         var snap:String = null;
+         var bl:int = 0;
+         var m:Matrix = null;
+         var ct:ColorTransform = null;
+         var clip:Rectangle = null;
+         var idx:int = 0;
+         while(n-- > 0)
+         {
+            t = param2.readUnsignedByte();
+            idx = readVar(param2);
+            if(sources[idx] === undefined)
+            {
+               sources[idx] = resolveSource(names[idx]);
+            }
+            src = sources[idx];
+            fl = param2.readUnsignedByte();
+            m = null;
+            ct = null;
+            clip = null;
+            if(t == 1)
+            {
+               snap = SNAPS[param2.readUnsignedByte()];
+               bl = param2.readUnsignedByte();
+               if(fl & 4)
+               {
+                  m = new Matrix(param2.readDouble(),param2.readDouble(),param2.readDouble(),param2.readDouble(),param2.readDouble(),param2.readDouble());
+               }
+               if(fl & 8)
+               {
+                  ct = new ColorTransform(param2.readDouble(),param2.readDouble(),param2.readDouble(),param2.readDouble(),param2.readDouble(),param2.readDouble(),param2.readDouble(),param2.readDouble());
+               }
+               if(fl & 16)
+               {
+                  clip = new Rectangle(param2.readDouble(),param2.readDouble(),param2.readDouble(),param2.readDouble());
+               }
+               if(src)
+               {
+                  param1.draw((fl & 1) != 0 ? new Bitmap(src,snap,(fl & 2) != 0) : src,m,ct,bl == 255 ? null : BLENDS[bl],clip,(fl & 32) != 0);
+               }
+            }
+            else
+            {
+               var mx:Number = param2.readDouble();
+               var my:Number = param2.readDouble();
+               var rot:int = param2.readInt();
+               var sx:Number = param2.readDouble();
+               var sy:Number = param2.readDouble();
+               bl = param2.readUnsignedByte();
+               var bx:Number = param2.readDouble();
+               var by:Number = param2.readDouble();
+               var tint:Array = null;
+               if(fl & 64)
+               {
+                  tint = [];
+                  var k:int = param2.readUnsignedByte();
+                  while(k-- > 0)
+                  {
+                     tint.push(param2.readDouble());
+                  }
+               }
+               if(fl & 16)
+               {
+                  clip = new Rectangle(param2.readDouble(),param2.readDouble(),param2.readDouble(),param2.readDouble());
+               }
+               if(src)
+               {
+                  // Made and removed around each use, like GameLevel.getFloor does, so it never shows on screen.
+                  var mo:GameObject = new GameObject(null,Bitmap,"BelowPlayer",0,0);
+                  mo.obj.visible = false;
+                  Bitmap(mo.obj).bitmapData = param1;
+                  mo.basex = bx;
+                  mo.basey = by;
+                  mo.drawToImage(src,mx,my,rot,sx,sy,bl == 255 ? "normal" : BLENDS[bl],clip,tint);
+                  Bitmap(mo.obj).bitmapData = null;
+                  mo.remove();
+               }
+            }
+         }
+      }
+
+      // Host: a recorded picture. The guest gets the calls; the host replays the same bytes for its copy and sends
+      // whatever still differs (normally nothing) as pixels.
+      private static function sendRecipe(param1:Object, param2:BitmapData, param3:Object) : void
+      {
+         var b:ByteArray = new ByteArray();
+         writeVar(b,param1.id);
+         b.writeShort(param3.w);
+         b.writeShort(param3.h);
+         b.writeByte(param3.tr ? 1 : 0);
+         b.writeUnsignedInt(param3.fill);
+         var ops:ByteArray = new ByteArray();
+         writeOps(ops,param3.ops);
+         b.writeBytes(ops);
+         b.compress();
+         queueBulk(D_RECIPE,b);
+         var copy:BitmapData = new BitmapData(param3.w,param3.h,param3.tr,param3.fill);
+         ops.position = 0;
+         replayOps(copy,ops);
+         param1.copy = copy;
+         var diff:Object = param2.compare(copy);
+         if(diff is BitmapData)
+         {
+            var r:Rectangle = null;
+            for each(r in changedRects(BitmapData(diff)))
+            {
+               sendImage(param1.id,param2,r,false);
+               copy.copyPixels(param2,r,r.topLeft);
+            }
+            BitmapData(diff).dispose();
+         }
       }
 
       private static function classOriginal(param1:String) : BitmapData
@@ -2058,7 +2523,11 @@ package Tools
             out[id] = 1;
          }
          latched = {};
-         appliedSeq = remoteSeq;
+         if(appliedSeq != remoteSeq)
+         {
+            appliedSeq = remoteSeq;
+            appliedTick = p2Ticks;
+         }
          return out;
       }
 
@@ -2085,14 +2554,19 @@ package Tools
          kb[Input.PAD_BACK] = keys[77] ? 1 : 0;
          kb[Input.PAD_START] = keys[80] ? 1 : 0;
          kb[Input.PAD_B] = keys[8] ? 1 : 0;
-         if(config["testpad"] == "1")
+         if(config["testpad"] == "1" || config["testpad"] == "2")
          {
+            // Walk, stop, half-pushed stick, stop, circle: starts, stops and turns like real play.
             var tt:Number = getTimer() / 1000;
-            kb[Input.PAD_LX] = Math.cos(tt * 1.5);
-            kb[Input.PAD_LY] = Math.sin(tt * 1.5);
+            var ph:Number = tt % 5;
+            var mv:Number = ph < 0.6 ? 1 : (ph < 1.1 ? 0 : (ph < 2.3 ? 0.5 : (ph < 2.8 ? 0 : (ph < 4 ? 0.3 : 0))));
+            var ang:Number = ph < 1.1 ? -Math.PI / 2 : (ph < 2.8 ? Math.PI / 2 : tt * 4);
+            kb[Input.PAD_LX] = Math.cos(ang) * mv;
+            kb[Input.PAD_LY] = Math.sin(ang) * mv;
             kb[Input.PAD_RX] = Math.cos(tt * 0.7);
             kb[Input.PAD_RY] = Math.sin(tt * 0.7);
-            kb[Input.PAD_RT] = int(tt * 2) % 2;
+            // testpad=2 only moves (firing also clicks menus).
+            kb[Input.PAD_RT] = config["testpad"] == "1" ? int(tt * 2) % 2 : 0;
          }
          var b:ByteArray = padBytes;
          b.length = 0;
@@ -2212,7 +2686,7 @@ package Tools
          p2PredFrom = null;
          lastP2 = null;
          predLog = [];
-         predErr = lagErr = 0;
+         predErr = lagErr = predCorr = 0;
          view = new Sprite();
          view.mouseEnabled = false;
          view.mouseChildren = false;
@@ -2542,8 +3016,9 @@ package Tools
             statsText.selectable = false;
             statsText.mouseEnabled = false;
             statsText.width = 800;
-            statsText.height = 18;
-            statsText.y = 560;
+            // Long lines wrap onto a second line; the box grows to fit.
+            statsText.wordWrap = true;
+            statsText.autoSize = "left";
          }
          if(!statsText.parent || stage.getChildIndex(statsText) != stage.numChildren - 1)
          {
@@ -2563,10 +3038,11 @@ package Tools
          }
          else if(mode == 2)
          {
-            line = "GUEST  rtt " + Math.round(hostRtt) + " ms  server " + pingText() + "  down " + Math.round(bytesIn / 1024 / secs) + " KB/s  frames " + Math.round(framesIn / secs) + "/s  jitter " + Math.round(jitter) + "  delay " + Math.round(isNaN(playOffset) ? 0 : playOffset - clockBase) + " ms  late " + underruns + "  queued " + snaps.length + "  p2 off " + Math.round(lagErr) + ">" + Math.round(predErr) + " px";
+            line = "GUEST  rtt " + Math.round(hostRtt) + " ms  server " + pingText() + "  down " + Math.round(bytesIn / 1024 / secs) + " KB/s  frames " + Math.round(framesIn / secs) + "/s  jitter " + Math.round(jitter) + "  delay " + Math.round(isNaN(playOffset) ? 0 : playOffset - clockBase) + " ms  late " + underruns + "  queued " + snaps.length + "   player 2 off " + Math.round(lagErr) + ">" + Math.round(predErr) + " fix " + predCorr.toFixed(1) + " px";
          }
          bytesOut = bytesIn = framesIn = framesSkipped = 0;
          statsText.text = " " + line + "   (F8)";
+         statsText.y = 578 - statsText.height;
       }
 
       private static function pingText() : String
@@ -2605,6 +3081,52 @@ package Tools
          else if(kind == D_IMAGEREF)
          {
             readImageRef(param1);
+         }
+         else if(kind == D_RECIPE)
+         {
+            var rb:ByteArray = new ByteArray();
+            param1.readBytes(rb,0,param1.bytesAvailable);
+            rb.uncompress();
+            rb.position = 0;
+            var rid:int = readVar(rb);
+            var rbd:BitmapData = new BitmapData(Math.max(1,rb.readUnsignedShort()),Math.max(1,rb.readUnsignedShort()),rb.readUnsignedByte() == 1,rb.readUnsignedInt());
+            replayOps(rbd,rb);
+            if(images[rid] && !sharedIds[rid])
+            {
+               BitmapData(images[rid]).dispose();
+            }
+            images[rid] = rbd;
+            delete sharedIds[rid];
+         }
+         else if(kind == D_FLOOROP)
+         {
+            var oid:int = readVar(param1);
+            if(pendingJpeg[oid])
+            {
+               pendingJpeg[oid].push(param1);
+            }
+            else if(images[oid])
+            {
+               if(sharedIds[oid])
+               {
+                  images[oid] = BitmapData(images[oid]).clone();
+                  delete sharedIds[oid];
+               }
+               replayOps(images[oid],param1);
+            }
+         }
+         else if(kind == D_FILL)
+         {
+            var fid2:int = readVar(param1);
+            var fw:int = param1.readUnsignedShort();
+            var fh:int = param1.readUnsignedShort();
+            var ftr:Boolean = param1.readUnsignedByte() == 1;
+            if(images[fid2] && !sharedIds[fid2])
+            {
+               BitmapData(images[fid2]).dispose();
+            }
+            images[fid2] = new BitmapData(Math.max(1,fw),Math.max(1,fh),ftr,param1.readUnsignedInt());
+            delete sharedIds[fid2];
          }
          else if(kind == D_TEXT)
          {
@@ -2810,6 +3332,10 @@ package Tools
             if(kind == 1)
             {
                bd = (getDefinitionByName("GlobalSetup.Embeds") as Class)[name] as BitmapData;
+            }
+            else if(kind == 3)
+            {
+               bd = resolveStatic(name);
             }
             else
             {
@@ -3030,6 +3556,7 @@ package Tools
             dx:param1.readFloat(),
             dy:param1.readFloat(),
             seq:param1.readUnsignedShort(),
+            age:param1.readUnsignedShort(),
             flags:param1.readUnsignedByte(),
             sx:param1.readShort(),
             ex:param1.readShort(),
@@ -3050,17 +3577,19 @@ package Tools
             p.set[readVar(param1)] = true;
          }
          p.cursor = readVar(param1);
-         // Pushing against something (a crate, a closed door): the host's player 2 barely moves although the
-         // stick says go. Don't predict movement that way.
+         // Pushing against something (a crate, a closed door): the stick says go, but the host's player 2 has
+         // almost no speed (colliding zeroes it) and has barely moved since the last frame. Free movement gets
+         // well above that within a few game ticks, even from standing or with the stick half pushed. Don't
+         // predict movement that way.
          var inp:Object = inputAt(p.seq);
          if(lastP2 && inp && param3 > lastP2.t)
          {
             var ticks:Number = (param3 - lastP2.t) / 10;
-            if(Math.abs(inp.mx) > 0.3 && Math.abs(p.x - lastP2.x) / ticks < 0.4)
+            if(Math.abs(inp.mx) > 0.3 && Math.abs(p.dx) < 0.35 * Math.abs(inp.mx) && Math.abs(p.x - lastP2.x) / ticks < 0.7 * Math.abs(inp.mx))
             {
                p.blockX = inp.mx > 0 ? 1 : -1;
             }
-            if(Math.abs(inp.my) > 0.3 && Math.abs(p.y - lastP2.y) / ticks < 0.4)
+            if(Math.abs(inp.my) > 0.3 && Math.abs(p.dy) < 0.35 * Math.abs(inp.my) && Math.abs(p.y - lastP2.y) / ticks < 0.7 * Math.abs(inp.my))
             {
                p.blockY = inp.my > 0 ? 1 : -1;
             }
@@ -3096,26 +3625,28 @@ package Tools
          return null;
       }
 
-      // The guest time whose input the host had just applied when it captured this state: about a round trip
-      // before the frame arrived, but after the last input it had and before the first it didn't.
+      // The guest time this state corresponds to: the host had been applying input `seq` for `age` ms, so it's
+      // that long after the input was sent (but not past the next input, which the host didn't have yet). Measured
+      // this way, network jitter doesn't move the prediction. Without a matching input: a round trip before the
+      // frame arrived.
       private static function inputTime(param1:Object, param2:int) : Number
       {
-         var tau:Number = param2 - hostRtt;
          var i:int = inputs.length - 1;
+         var tau:Number = NaN;
          while(i >= 0)
          {
             if((param1.seq - inputs[i].seq & 65535) < 32768)
             {
-               tau = Math.max(tau,inputs[i].t);
+               tau = inputs[i].t + param1.age;
                if(i + 1 < inputs.length)
                {
                   tau = Math.min(tau,inputs[i + 1].t);
                }
-               return tau;
+               return Math.min(tau,param2);
             }
             i--;
          }
-         return tau;
+         return param2 - hostRtt;
       }
 
       // Where player 2 will be once the host has applied every input sent so far: the newest host state, moved
@@ -3214,6 +3745,7 @@ package Tools
                var old:Point = predictPlayer2(p2PredFrom.p2,p2PredFrom.arr,param4);
                p2ErrX += old.x - pred.x;
                p2ErrY += old.y - pred.y;
+               predCorr += (Math.sqrt((old.x - pred.x) * (old.x - pred.x) + (old.y - pred.y) * (old.y - pred.y)) - predCorr) * 0.05;
                if(p2ErrX * p2ErrX + p2ErrY * p2ErrY > 48 * 48)
                {
                   p2ErrX = p2ErrY = 0;
@@ -3222,8 +3754,11 @@ package Tools
             p2PredSn = latest.sn;
             p2PredFrom = latest;
          }
-         p2ErrX *= 0.8;
-         p2ErrY *= 0.8;
+         // Corrections fade out over about 100 ms, so they show as a short slide rather than a snap.
+         var fade:Number = Math.exp(-Math.min(100,param4 - p2LastAt) / 100);
+         p2LastAt = param4;
+         p2ErrX *= fade;
+         p2ErrY *= fade;
          p2OffX = rawX + p2ErrX;
          p2OffY = rawY + p2ErrY;
          // The reticle: at the predicted position plus this player's own aim.

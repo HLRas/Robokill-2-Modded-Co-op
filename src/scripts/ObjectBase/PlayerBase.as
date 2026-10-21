@@ -2162,6 +2162,22 @@ package ObjectBase
          return false;
       }
       
+      // Online: the muzzle flash, sound and recoil of a shot player 2's guest fired (Net makes the bullets).
+      public function remoteShotEffects(param1:WeaponBase, param2:int) : void
+      {
+         var _loc3_:String = "Shoot";
+         if(param1 is PulseGun)
+         {
+            _loc3_ = "PulseShoot";
+         }
+         emitConditionalParticles(_loc3_,Number(offsetsX[param2]),Number(offsetsY[param2]),false,baseRotation + 180);
+         doSound(param1);
+         if(weaponIcons[param2])
+         {
+            GameObject(weaponIcons[param2]).addFilter(new GameObjectFilterRecoil(param1.recoilTime(),param1.recoilAmount()));
+         }
+      }
+
       public function handleFiring() : void
       {
          var _loc2_:int = 0;
@@ -2786,7 +2802,11 @@ package ObjectBase
                if(weapons[_loc1_])
                {
                   _loc2_ = WeaponBase(weapons[_loc1_]);
-                  if(_loc2_.charges())
+                  if(partner && Net.guestFires(_loc2_))
+                  {
+                     // Online, player 2's guest fires this gun itself (see Net).
+                  }
+                  else if(_loc2_.charges())
                   {
                      _loc2_.increaseCharge();
                   }

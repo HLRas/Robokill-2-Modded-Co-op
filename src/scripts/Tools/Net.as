@@ -2,7 +2,10 @@ package Tools
 {
    import Audio.GameSound;
    import Audio.GameSoundChannel;
+   import GameObject.GameObject;
+   import ObjectBase.PlayerBase;
    import Scenes.MainMenu;
+   import Scenes.MainScene;
    import flash.display.Bitmap;
    import flash.display.BitmapData;
    import flash.display.JPEGEncoderOptions;
@@ -102,6 +105,8 @@ package Tools
 
       private static const R_ERROR:int = 13;
 
+      private static const R_PONG:int = 14;
+
       private static const D_IMAGE:int = 1;
 
       private static const D_FREE:int = 2;
@@ -119,6 +124,11 @@ package Tools
       private static const D_TEXT:int = 8;
 
       private static const D_JPEG:int = 9;
+
+      // A piece of a big message (pictures): u8 last, bytes. Pieces of one message arrive in order.
+      private static const D_CHUNK:int = 10;
+
+      private static const CHUNK_SIZE:int = 4096;
 
       private static const BLENDS:Array = [BlendMode.NORMAL,BlendMode.ADD,BlendMode.MULTIPLY,BlendMode.SCREEN,BlendMode.LIGHTEN,BlendMode.DARKEN,BlendMode.OVERLAY,BlendMode.HARDLIGHT,BlendMode.DIFFERENCE,BlendMode.SUBTRACT,BlendMode.INVERT,BlendMode.ALPHA,BlendMode.ERASE];
 
@@ -174,6 +184,104 @@ package Tools
       private static var lastSent:Object = {};
 
       private static var frameSeq:int = 0;
+
+      // Flow control. The guest acknowledges each frame; frames are only captured while the oldest unacknowledged
+      // one is younger than the base round trip plus a margin, so a slow link drops frames instead of queueing
+      // them (queued frames are lag). Round trips are measured from the acks.
+      private static var ackSeq:int = 0;
+
+      private static var sentAt:Array = new Array(256);
+
+      private static var bulkAt:Array = new Array(256);
+
+      private static var rtt:Number = 0;
+
+      private static var rttMin:Number = -1;
+
+      private static var rttMinAt:int = 0;
+
+      private static var rttNextMin:Number = -1;
+
+      // Pictures and other big messages wait here and go out in pieces between frames, as fast as the link
+      // allows without delaying the frames (the window shrinks when round trips grow).
+      private static var bulk:Array = [];
+
+      private static var bulkPos:int = 0;
+
+      private static var bulkSent:Number = 0;
+
+      private static var bulkAcked:Number = 0;
+
+      private static var bulkWindow:Number = 16384;
+
+      private static var bulkCutAt:int = 0;
+
+      private static var framesSkipped:int = 0;
+
+      // Host: buttons seen pressed in a guest message, kept pressed until the game has read them once, so a quick
+      // tap that's released before the next frame still counts.
+      private static var latched:Object = {};
+
+      // Round trip to the relay (PING / PONG), shown in the F8 stats. -1 = unknown (an older relay doesn't echo).
+      private static var serverPing:Number = -1;
+
+      // ---- player 2 prediction ----
+      // The guest's own robot would only move a round trip after its input. So each frame also describes player 2
+      // (position, speed, the last guest input applied, which pictures are its body, legs, shadows and guns, and
+      // the aim reticle), and the guest draws those pictures where its own input will have taken player 2 by
+      // replaying that input from the host's state (the same movement maths as PlayerBase). predict=0 in
+      // online.txt turns it off.
+      private static var player2:PlayerBase;
+
+      private static var player2At:int = 0;
+
+      private static var p2Objects:Dictionary;
+
+      private static var p2Oids:Array = [];
+
+      private static var p2CursorOid:int = 0;
+
+      // Host: newest guest input number received, and the one the game last read.
+      private static var remoteSeq:int = 0;
+
+      private static var appliedSeq:int = 0;
+
+      // Guest: the inputs sent ({seq, t, mx, my}: move values as the host's PlayerBase will see them), and the
+      // aim direction.
+      private static var inputSeq:int = 0;
+
+      private static var inputs:Array = [];
+
+      private static var predPad:Object;
+
+      private static var padValues:Object = {};
+
+      // Guest: the drawn offset of player 2 from where the host frame shows it, and a correction that fades out
+      // when a new frame moves the prediction (so it doesn't jump).
+      private static var p2OffX:Number = 0;
+
+      private static var p2OffY:Number = 0;
+
+      private static var p2ErrX:Number = 0;
+
+      private static var p2ErrY:Number = 0;
+
+      private static var p2CurX:Number = 0;
+
+      private static var p2CurY:Number = 0;
+
+      private static var p2PredSn:int = -1;
+
+      private static var p2PredFrom:Object = null;
+
+      private static var lastP2:Object = null;
+
+      // Guest stats: how far the drawn player 2 was from where the host later had it, with and without prediction.
+      private static var predLog:Array = [];
+
+      private static var predErr:Number = 0;
+
+      private static var lagErr:Number = 0;
 
       // The game's shared pictures (Embeds' static BitmapData) by name, and each embedded picture class's original
       // pixels: pictures the guest's copy of the game already has are sent by name instead of pixels.
@@ -246,11 +354,45 @@ package Tools
 
       private static var bufferMs:Number = 60;
 
+      // Playback runs at host time (now - playOffset). playOffset eases toward clockBase + bufferMs, so changes
+      // in delay show as a slight speed-up or slow-down rather than a jump.
+      private static var playOffset:Number = NaN;
+
+      private static var lastRenderAt:int = 0;
+
+      // Average time between host frames.
+      private static var frameGap:Number = 33;
+
+      private static var lastFrameT:Number = -1;
+
+      private static var underruns:int = 0;
+
+      // The snapshot before snaps[0], for extrapolating when the next one is late.
+      private static var prevSnap:Object = null;
+
+      private static var snapSerial:int = 0;
+
+      // Recycled per-object frame entries.
+      private static var entryPool:Array = [];
+
+      private static var chunkBuf:ByteArray = null;
+
+      private static var lastFrameSeq:int = -1;
+
+      private static var ackedSeq:int = -1;
+
+      private static var hostRtt:Number = 0;
+
       private static var tmpMatrix:Matrix = new Matrix();
 
-      private static var lastPadBytes:String = "";
+      private static var padBytes:ByteArray = new ByteArray();
+
+      private static var lastPad:Array = [];
 
       private static var lastPadSent:int = 0;
+
+      // Guest: per pool slot, what was last applied to its Bitmap, so unchanged pictures aren't touched.
+      private static var poolState:Array = [];
 
       public function Net()
       {
@@ -331,6 +473,12 @@ package Tools
                relayPort = int(parts[1]);
             }
          }
+         // Testing aids: stats=1 shows the F8 stats from the start; testpad=1 makes a guest walk in circles and
+         // shoot, so online play can be watched without a second person.
+         if(config["stats"] == "1")
+         {
+            statsOn = true;
+         }
          if(config["autohost"])
          {
             startHosting();
@@ -355,6 +503,13 @@ package Tools
       public static function guestWaiting() : Boolean
       {
          return mode == 1 && peer && remotePad != null;
+      }
+
+      // Called by MainScene each update with its player 2 (or null).
+      public static function watchPlayer2(param1:PlayerBase) : void
+      {
+         player2 = param1;
+         player2At = getTimer();
       }
 
       public static function takeGuestLeft() : Boolean
@@ -531,6 +686,15 @@ package Tools
          sendRelay(R_DATA,b);
       }
 
+      // Big messages go through the bulk queue (see sendBulk), in order among themselves.
+      private static function queueBulk(param1:int, param2:ByteArray) : void
+      {
+         var b:ByteArray = new ByteArray();
+         b.writeByte(param1);
+         b.writeBytes(param2);
+         bulk.push(b);
+      }
+
       private static function flush() : void
       {
          if(sock && sock.connected)
@@ -552,12 +716,13 @@ package Tools
          var type:int = 0;
          var body:ByteArray = null;
          var rest:ByteArray = null;
+         // inBuf.position is where the next message starts.
+         var pos:int = inBuf.position;
          if(s.bytesAvailable > 0)
          {
             bytesIn += s.bytesAvailable;
             s.readBytes(inBuf,inBuf.length,s.bytesAvailable);
          }
-         var pos:int = 0;
          while(inBuf.length - pos >= 4)
          {
             inBuf.position = pos;
@@ -585,13 +750,25 @@ package Tools
                return;
             }
          }
-         rest = new ByteArray();
-         if(pos < inBuf.length)
+         // Only move leftover bytes down when everything was used or a lot of the buffer is spent; copying the
+         // unfinished rest after every read made big pictures cost quadratic time.
+         if(pos >= inBuf.length)
          {
+            inBuf.length = 0;
+            inBuf.position = 0;
+         }
+         else if(pos > 262144)
+         {
+            rest = new ByteArray();
             inBuf.position = pos;
             inBuf.readBytes(rest,0,inBuf.length - pos);
+            inBuf = rest;
+            inBuf.position = 0;
          }
-         inBuf = rest;
+         else
+         {
+            inBuf.position = pos;
+         }
       }
 
       private static function onRelayMessage(param1:int, param2:ByteArray) : void
@@ -644,20 +821,31 @@ package Tools
          {
             lost(param2.readUTF());
          }
+         else if(param1 == R_PONG && param2.length >= 4)
+         {
+            serverPing = getTimer() - param2.readUnsignedInt();
+         }
+      }
+
+      private static function sendPing() : void
+      {
+         lastPing = getTimer();
+         var b:ByteArray = new ByteArray();
+         b.writeUnsignedInt(lastPing);
+         sendRelay(R_PING,b);
       }
 
       private static function onExitFrame(param1:Event) : void
       {
          ++frameNo;
-         if(sock && sock.connected && getTimer() - lastPing > 20000)
+         if(sock && sock.connected && getTimer() - lastPing > 2000)
          {
-            lastPing = getTimer();
-            sendRelay(R_PING);
+            sendPing();
          }
          if(mode == 1 && peer && frameNo % 2 == 0)
          {
-            // Skip frames while the upload is backed up, so lag doesn't build up.
-            if(sock && sock.bytesPending < 150000)
+            // Skip frames while the link is backed up, so lag doesn't build up.
+            if(canSendFrame())
             {
                try
                {
@@ -667,6 +855,14 @@ package Tools
                {
                }
             }
+            else
+            {
+               ++framesSkipped;
+            }
+         }
+         if(mode == 1 && peer)
+         {
+            sendBulk();
          }
          if(mode == 2 && peer)
          {
@@ -695,6 +891,15 @@ package Tools
          objIds = new Dictionary(true);
          nextObj = 1;
          lastSent = {};
+         ackSeq = frameSeq;
+         rtt = 0;
+         rttMin = rttNextMin = -1;
+         rttMinAt = getTimer();
+         bulk = [];
+         bulkPos = 0;
+         bulkSent = bulkAcked = 0;
+         bulkWindow = 16384;
+         latched = {};
          if(!staticNames)
          {
             buildStaticNames();
@@ -727,10 +932,114 @@ package Tools
          }
       }
 
+      private static function canSendFrame() : Boolean
+      {
+         if(!sock || sock.bytesPending > 32768)
+         {
+            return false;
+         }
+         var unacked:int = frameSeq - ackSeq;
+         if(unacked < 2)
+         {
+            return true;
+         }
+         if(rttMin < 0)
+         {
+            return unacked < 8;
+         }
+         return getTimer() - sentAt[ackSeq + 1 & 255] < rttMin + 100;
+      }
+
+      // The guest has everything up to frame `param1` (16 bits).
+      private static function onAck(param1:int) : void
+      {
+         var seq:int = frameSeq - (frameSeq - param1 & 65535);
+         if(seq <= ackSeq)
+         {
+            return;
+         }
+         var now:int = getTimer();
+         var sample:Number = now - sentAt[seq & 255];
+         ackSeq = seq;
+         bulkAcked = bulkAt[seq & 255];
+         rtt = rtt > 0 ? rtt + (sample - rtt) * 0.1 : sample;
+         if(rttMin < 0 || sample < rttMin)
+         {
+            rttMin = sample;
+         }
+         if(rttNextMin < 0 || sample < rttNextMin)
+         {
+            rttNextMin = sample;
+         }
+         // The base round trip is the lowest of the last 10-20 s, so it follows route changes.
+         if(now - rttMinAt > 10000)
+         {
+            rttMin = rttNextMin;
+            rttNextMin = -1;
+            rttMinAt = now;
+         }
+         // Pictures: send less at once when round trips grow (a queue is building), more while they stay low.
+         if(sample > rttMin + 50)
+         {
+            if(now - bulkCutAt > rttMin + 50)
+            {
+               bulkCutAt = now;
+               bulkWindow = Math.max(4096,bulkWindow * 0.5);
+            }
+         }
+         else if(sample < rttMin + 25 && bulkSent - bulkAcked > bulkWindow * 0.5)
+         {
+            // Only grows while it's being used, so it still fits the link when the next pictures come.
+            bulkWindow = Math.min(262144,bulkWindow + 1024);
+         }
+      }
+
+      // Big messages, in pieces, while the amount not yet acknowledged is within the window and the frames
+      // aren't queueing (the oldest unacknowledged frame is barely older than the base round trip).
+      private static function sendBulk() : void
+      {
+         var n:int = 0;
+         var msg:ByteArray = null;
+         var size:int = 0;
+         var b:ByteArray = null;
+         if(bulk.length == 0 || frameSeq - ackSeq >= 2 && (rttMin < 0 || getTimer() - sentAt[ackSeq + 1 & 255] > rttMin + 40))
+         {
+            return;
+         }
+         while(bulk.length > 0 && bulkSent - bulkAcked < bulkWindow && n < 4 && sock && sock.bytesPending < 65536)
+         {
+            msg = bulk[0];
+            // Smaller pieces on slow links (small window), so a frame never waits long behind one.
+            size = Math.min(Math.max(1024,Math.min(CHUNK_SIZE,bulkWindow / 4)),msg.length - bulkPos);
+            if(bulkPos == 0 && size == msg.length)
+            {
+               sendRelay(R_DATA,msg);
+            }
+            else
+            {
+               b = new ByteArray();
+               b.writeByte(D_CHUNK);
+               b.writeByte(bulkPos + size >= msg.length ? 1 : 0);
+               b.writeBytes(msg,bulkPos,size);
+               sendRelay(R_DATA,b);
+            }
+            bulkPos += size;
+            bulkSent += size;
+            if(bulkPos >= msg.length)
+            {
+               bulk.shift();
+               bulkPos = 0;
+            }
+            n++;
+         }
+      }
+
       private static function captureFrame() : void
       {
          var t0:int = getTimer();
          ++frameSeq;
+         sentAt[frameSeq & 255] = t0;
+         bulkAt[frameSeq & 255] = bulkSent;
          frameBody = new ByteArray();
          frameCount = 0;
          rootFix = null;
@@ -748,12 +1057,16 @@ package Tools
                rootFix = m;
             }
          }
+         collectPlayer2();
          walk(stage,null,BlendMode.NORMAL);
          var out:ByteArray = new ByteArray();
          out.writeUnsignedInt(t0);
+         out.writeShort(frameSeq);
+         out.writeShort(Math.min(65535,Math.round(rtt)));
          writeVar(out,frameCount);
          out.writeBytes(frameBody);
          writeChannels(out);
+         writePlayer2(out);
          out.compress();
          sendData(D_FRAME,out);
          if(frameNo % 600 == 0)
@@ -761,6 +1074,103 @@ package Tools
             sweep();
          }
          captureMs += (getTimer() - t0 - captureMs) * 0.1;
+      }
+
+      // Host: the display objects that make up player 2 (1) and its aim reticle (2), when it can be predicted:
+      // alive, not falling, not teleporting.
+      private static function collectPlayer2() : void
+      {
+         p2Objects = null;
+         p2Oids.length = 0;
+         p2CursorOid = 0;
+         var p:PlayerBase = player2;
+         if(!p || getTimer() - player2At > 250 || p._removed || p.falling || p.beforeTeleporting() || config["predict"] == "0")
+         {
+            return;
+         }
+         p2Objects = new Dictionary();
+         markObjects(p,1);
+         var i:int = 0;
+         while(i < 4)
+         {
+            if(p.weaponIcons[i])
+            {
+               markObjects(p.weaponIcons[i],1);
+            }
+            i++;
+         }
+         if(p.riotShield)
+         {
+            markObjects(p.riotShield,1);
+         }
+         var cur:Sprite = Input.i ? Input.i.p2CursorSprite() : null;
+         if(cur && cur.visible)
+         {
+            markDisplay(cur,2);
+         }
+      }
+
+      private static function markObjects(param1:GameObject, param2:int) : void
+      {
+         var c:GameObject = null;
+         if(param1.obj)
+         {
+            markDisplay(param1.obj,param2);
+         }
+         for each(c in param1.children)
+         {
+            markObjects(c,param2);
+         }
+      }
+
+      private static function markDisplay(param1:DisplayObject, param2:int) : void
+      {
+         p2Objects[param1] = param2;
+         var dc:DisplayObjectContainer = param1 as DisplayObjectContainer;
+         var i:int = 0;
+         if(dc)
+         {
+            while(i < dc.numChildren)
+            {
+               markDisplay(dc.getChildAt(i),param2);
+               i++;
+            }
+         }
+      }
+
+      // u8 present; then x, y (1/4 px), dx, dy, last guest input applied, can-move flags, room bounds, half size,
+      // aim point, player 2's object ids, the reticle's id.
+      private static function writePlayer2(param1:ByteArray) : void
+      {
+         var p:PlayerBase = player2;
+         if(!p2Objects || p2Oids.length == 0)
+         {
+            param1.writeByte(0);
+            return;
+         }
+         var ms:MainScene = p.gs as MainScene;
+         param1.writeByte(1);
+         param1.writeShort(clampShort(p.basex * 4));
+         param1.writeShort(clampShort(p.basey * 4));
+         param1.writeFloat(p.dx);
+         param1.writeFloat(p.dy);
+         param1.writeShort(appliedSeq);
+         param1.writeByte((p.canMoveX() ? 1 : 0) | (p.canMoveY() ? 2 : 0));
+         param1.writeShort(ms ? ms.startx : 0);
+         param1.writeShort(ms ? ms.endx : 800);
+         param1.writeShort(ms ? ms.starty : 0);
+         param1.writeShort(ms ? ms.endy : 600);
+         param1.writeByte(Math.min(255,p.baseWidth / 2));
+         param1.writeByte(Math.min(255,p.baseHeight / 2));
+         param1.writeShort(clampShort(p.aimPointX() * 4));
+         param1.writeShort(clampShort(p.aimPointY() * 4));
+         writeVar(param1,p2Oids.length);
+         var oid:int = 0;
+         for each(oid in p2Oids)
+         {
+            writeVar(param1,oid);
+         }
+         writeVar(param1,p2CursorOid);
       }
 
       private static function writeVar(param1:ByteArray, param2:uint) : void
@@ -884,13 +1294,30 @@ package Tools
          var tx:int = clampShort(m.tx * 4);
          var ty:int = clampShort(m.ty * 4);
          var al:int = Math.round(Math.min(1,ct.alphaMultiplier) * 255);
-         var col:String = ct.redMultiplier != 1 || ct.greenMultiplier != 1 || ct.blueMultiplier != 1 || ct.redOffset != 0 || ct.greenOffset != 0 || ct.blueOffset != 0 ? [clampShort(ct.redMultiplier * 256),clampShort(ct.greenMultiplier * 256),clampShort(ct.blueMultiplier * 256),clampShort(ct.redOffset),clampShort(ct.greenOffset),clampShort(ct.blueOffset)].join(",") : "";
+         var tinted:Boolean = ct.redMultiplier != 1 || ct.greenMultiplier != 1 || ct.blueMultiplier != 1 || ct.redOffset != 0 || ct.greenOffset != 0 || ct.blueOffset != 0;
+         var cr:int = tinted ? clampShort(ct.redMultiplier * 256) : 256;
+         var cg:int = tinted ? clampShort(ct.greenMultiplier * 256) : 256;
+         var cb:int = tinted ? clampShort(ct.blueMultiplier * 256) : 256;
+         var cro:int = tinted ? clampShort(ct.redOffset) : 0;
+         var cgo:int = tinted ? clampShort(ct.greenOffset) : 0;
+         var cbo:int = tinted ? clampShort(ct.blueOffset) : 0;
          var fl:int = Math.max(0,BLENDS.indexOf(param6)) | (param7 ? 128 : 0);
          var oid:int = objIds[param1];
          if(!oid)
          {
             oid = nextObj++;
             objIds[param1] = oid;
+         }
+         if(p2Objects && p2Objects[param1])
+         {
+            if(p2Objects[param1] == 2)
+            {
+               p2CursorOid = oid;
+            }
+            else
+            {
+               p2Oids.push(oid);
+            }
          }
          var last:Object = lastSent[oid];
          var mask:int = 0;
@@ -918,7 +1345,7 @@ package Tools
             {
                mask |= 8;
             }
-            if(last.col != col)
+            if(last.cr != cr || last.cg != cg || last.cb != cb || last.cro != cro || last.cgo != cgo || last.cbo != cbo)
             {
                mask |= 16;
             }
@@ -965,21 +1392,26 @@ package Tools
          }
          if(mask & 16)
          {
-            if(col.length > 0)
+            if(tinted)
             {
                b.writeByte(1);
-               b.writeShort(clampShort(ct.redMultiplier * 256));
-               b.writeShort(clampShort(ct.greenMultiplier * 256));
-               b.writeShort(clampShort(ct.blueMultiplier * 256));
-               b.writeShort(clampShort(ct.redOffset));
-               b.writeShort(clampShort(ct.greenOffset));
-               b.writeShort(clampShort(ct.blueOffset));
+               b.writeShort(cr);
+               b.writeShort(cg);
+               b.writeShort(cb);
+               b.writeShort(cro);
+               b.writeShort(cgo);
+               b.writeShort(cbo);
             }
             else
             {
                b.writeByte(0);
             }
-            last.col = col;
+            last.cr = cr;
+            last.cg = cg;
+            last.cb = cb;
+            last.cro = cro;
+            last.cgo = cgo;
+            last.cbo = cbo;
          }
          if(mask & 32)
          {
@@ -1088,12 +1520,12 @@ package Tools
                var diff:Object = param2.compare(orig);
                if(diff is BitmapData)
                {
-                  var r:Rectangle = BitmapData(diff).getColorBoundsRect(4294967295,0,false);
-                  BitmapData(diff).dispose();
-                  if(r.width > 0 && r.height > 0)
+                  var r:Rectangle = null;
+                  for each(r in changedRects(BitmapData(diff)))
                   {
                      sendImage(param1.id,param2,r,false);
                   }
+                  BitmapData(diff).dispose();
                   param1.copy = param2.clone();
                }
                else
@@ -1161,21 +1593,73 @@ package Tools
          var diff:Object = param2.compare(param1.copy);
          if(diff is BitmapData)
          {
-            var r:Rectangle = BitmapData(diff).getColorBoundsRect(4294967295,0,false);
-            BitmapData(diff).dispose();
-            if(r.width > 0 && r.height > 0)
+            var r:Rectangle = null;
+            for each(r in changedRects(BitmapData(diff)))
             {
                sendImage(param1.id,param2,r,false);
                param1.copy.copyPixels(param2,r,r.topLeft);
             }
+            BitmapData(diff).dispose();
          }
+      }
+
+      private static var cellScratch:BitmapData;
+
+      // The changed parts of a picture (non-zero pixels of a compare() result). A big change area is split into
+      // 128 px cells and each cell's own changed rectangle is used, so two blood splats in opposite corners of
+      // the floor don't resend the whole floor.
+      private static function changedRects(param1:BitmapData) : Array
+      {
+         var out:Array = [];
+         var all:Rectangle = param1.getColorBoundsRect(4294967295,0,false);
+         if(all.width <= 0 || all.height <= 0)
+         {
+            return out;
+         }
+         if(all.width * all.height <= 32768)
+         {
+            out.push(all);
+            return out;
+         }
+         if(!cellScratch)
+         {
+            cellScratch = new BitmapData(128,128,true,0);
+         }
+         var cy:int = all.y;
+         var cx:int = 0;
+         var cell:Rectangle = new Rectangle();
+         var r:Rectangle = null;
+         var origin:Point = new Point();
+         while(cy < all.bottom)
+         {
+            cx = all.x;
+            while(cx < all.right)
+            {
+               cell.x = cx;
+               cell.y = cy;
+               cell.width = Math.min(128,all.right - cx);
+               cell.height = Math.min(128,all.bottom - cy);
+               cellScratch.fillRect(cellScratch.rect,0);
+               cellScratch.copyPixels(param1,cell,origin);
+               r = cellScratch.getColorBoundsRect(4294967295,0,false);
+               if(r.width > 0 && r.height > 0)
+               {
+                  r.x += cx;
+                  r.y += cy;
+                  out.push(r);
+               }
+               cx += 128;
+            }
+            cy += 128;
+         }
+         return out;
       }
 
       private static function sendImage(param1:int, param2:BitmapData, param3:Rectangle, param4:Boolean) : void
       {
-         // Big opaque areas (screen-fade snapshots, room floors) go as JPEG: a tenth of the size, so they don't
-         // hold up the frames behind them.
-         if(param3.width * param3.height >= 40000)
+         // Opaque areas that aren't tiny (screen-fade snapshots, room floors, floor decals) go as JPEG: a tenth of
+         // the size.
+         if(param3.width * param3.height >= 4096)
          {
             var opaque:Boolean = !param2.transparent || !param2.getColorBoundsRect(4278190080,4278190080,false).intersects(param3);
             if(opaque)
@@ -1188,7 +1672,7 @@ package Tools
                jb.writeShort(param3.x);
                jb.writeShort(param3.y);
                jb.writeBytes(param2.encode(param3,new JPEGEncoderOptions(85)));
-               sendData(D_JPEG,jb);
+               queueBulk(D_JPEG,jb);
                return;
             }
          }
@@ -1204,7 +1688,7 @@ package Tools
          var px:ByteArray = param2.getPixels(param3);
          px.compress();
          b.writeBytes(px);
-         sendData(D_IMAGE,b);
+         queueBulk(D_IMAGE,b);
       }
 
       // Tells the guest to drop pictures the host hasn't shown for a while (or no longer has).
@@ -1244,7 +1728,8 @@ package Tools
          }
          if(n > 0)
          {
-            sendData(D_FREE,b);
+            // After any pictures still queued, which may be the ones being freed.
+            queueBulk(D_FREE,b);
          }
          // Objects not shown for ~10 s are forgotten (sent in full if they come back). The guest keeps its copy
          // longer, so it never lacks the state a change is relative to.
@@ -1361,32 +1846,79 @@ package Tools
          }
       }
 
+      // A filter list's id. The key is built first; the filters are only encoded (and sent) the first time.
       private static function filterSetId(param1:Array) : int
       {
          var f:BitmapFilter = null;
-         var b:ByteArray = new ByteArray();
          var key:String = "";
          var n:int = 0;
-         var cm:ColorMatrixFilter = null;
          var g:GlowFilter = null;
          var d:DropShadowFilter = null;
          var bf:BlurFilter = null;
-         var m:Array = null;
-         var i:int = 0;
-         b.writeByte(0);
          for each(f in param1)
          {
             if(f is ColorMatrixFilter)
             {
-               cm = ColorMatrixFilter(f);
-               m = cm.matrix;
+               key += "c" + ColorMatrixFilter(f).matrix.join(",");
+            }
+            else if(f is GlowFilter)
+            {
+               g = GlowFilter(f);
+               key += "g" + g.color + "," + g.alpha + "," + g.blurX + "," + g.blurY + "," + g.strength + "," + g.quality + "," + g.inner + "," + g.knockout;
+            }
+            else if(f is DropShadowFilter)
+            {
+               d = DropShadowFilter(f);
+               key += "d" + d.distance + "," + d.angle + "," + d.color + "," + d.alpha + "," + d.blurX + "," + d.blurY + "," + d.strength + "," + d.quality + "," + d.inner + "," + d.knockout + "," + d.hideObject;
+            }
+            else
+            {
+               if(!(f is BlurFilter))
+               {
+                  continue;
+               }
+               bf = BlurFilter(f);
+               key += "b" + bf.blurX + "," + bf.blurY + "," + bf.quality;
+            }
+            n++;
+         }
+         if(n == 0)
+         {
+            return 0;
+         }
+         if(filterIds[key])
+         {
+            return filterIds[key];
+         }
+         var id:int = nextFilter++;
+         filterIds[key] = id;
+         var out:ByteArray = new ByteArray();
+         out.writeShort(id);
+         out.writeByte(n);
+         writeFilters(out,param1);
+         sendData(D_FILTERS,out);
+         return id;
+      }
+
+      private static function writeFilters(param1:ByteArray, param2:Array) : void
+      {
+         var f:BitmapFilter = null;
+         var m:Array = null;
+         var i:int = 0;
+         var g:GlowFilter = null;
+         var d:DropShadowFilter = null;
+         var bf:BlurFilter = null;
+         var b:ByteArray = param1;
+         for each(f in param2)
+         {
+            if(f is ColorMatrixFilter)
+            {
+               m = ColorMatrixFilter(f).matrix;
                b.writeByte(1);
-               key += "c";
                i = 0;
                while(i < 20)
                {
                   b.writeFloat(m[i]);
-                  key += "," + m[i];
                   i++;
                }
             }
@@ -1401,7 +1933,6 @@ package Tools
                b.writeFloat(g.strength);
                b.writeByte(g.quality);
                b.writeByte((g.inner ? 1 : 0) | (g.knockout ? 2 : 0));
-               key += "g" + [g.color,g.alpha,g.blurX,g.blurY,g.strength,g.quality,g.inner,g.knockout].join(",");
             }
             else if(f is DropShadowFilter)
             {
@@ -1416,40 +1947,16 @@ package Tools
                b.writeFloat(d.strength);
                b.writeByte(d.quality);
                b.writeByte((d.inner ? 1 : 0) | (d.knockout ? 2 : 0) | (d.hideObject ? 4 : 0));
-               key += "d" + [d.distance,d.angle,d.color,d.alpha,d.blurX,d.blurY,d.strength,d.quality,d.inner,d.knockout,d.hideObject].join(",");
             }
-            else
+            else if(f is BlurFilter)
             {
-               if(!(f is BlurFilter))
-               {
-                  continue;
-               }
                bf = BlurFilter(f);
                b.writeByte(4);
                b.writeFloat(bf.blurX);
                b.writeFloat(bf.blurY);
                b.writeByte(bf.quality);
-               key += "b" + [bf.blurX,bf.blurY,bf.quality].join(",");
             }
-            n++;
          }
-         if(n == 0)
-         {
-            return 0;
-         }
-         if(filterIds[key])
-         {
-            return filterIds[key];
-         }
-         var id:int = nextFilter++;
-         filterIds[key] = id;
-         b.position = 0;
-         b.writeByte(n);
-         var out:ByteArray = new ByteArray();
-         out.writeShort(id);
-         out.writeBytes(b);
-         sendData(D_FILTERS,out);
-         return id;
       }
 
       // Every playing sound channel: id, sound, volume, pan, position. The guest starts, adjusts and stops its
@@ -1506,12 +2013,53 @@ package Tools
          var values:Object = {};
          var n:int = param1.readUnsignedByte();
          var i:int = 0;
-         while(i < n && i < PAD_CONTROLS.length)
+         var v:Number = NaN;
+         while(i < n)
          {
-            values[PAD_CONTROLS[i]] = param1.readByte() / 127;
+            v = param1.readByte() / 127;
+            if(i < PAD_CONTROLS.length)
+            {
+               values[PAD_CONTROLS[i]] = v;
+               if(i >= 4 && v > 0.5)
+               {
+                  latched[PAD_CONTROLS[i]] = true;
+               }
+            }
             i++;
          }
          remotePad = values;
+         if(param1.bytesAvailable >= 2)
+         {
+            onAck(param1.readUnsignedShort());
+         }
+         if(param1.bytesAvailable >= 2)
+         {
+            remoteSeq = param1.readUnsignedShort();
+         }
+      }
+
+      // Host, once per game frame: the guest's controller, with any button pressed since the last call still
+      // down (a tap shorter than a frame would otherwise be missed).
+      public static function takeRemotePad() : Object
+      {
+         var id:String = null;
+         var out:Object = remotePad;
+         for(id in latched)
+         {
+            if(out == remotePad)
+            {
+               out = {};
+               var k:String = null;
+               for(k in remotePad)
+               {
+                  out[k] = remotePad[k];
+               }
+            }
+            out[id] = 1;
+         }
+         latched = {};
+         appliedSeq = remoteSeq;
+         return out;
       }
 
       // ---------------- guest ----------------
@@ -1537,11 +2085,23 @@ package Tools
          kb[Input.PAD_BACK] = keys[77] ? 1 : 0;
          kb[Input.PAD_START] = keys[80] ? 1 : 0;
          kb[Input.PAD_B] = keys[8] ? 1 : 0;
-         var b:ByteArray = new ByteArray();
+         if(config["testpad"] == "1")
+         {
+            var tt:Number = getTimer() / 1000;
+            kb[Input.PAD_LX] = Math.cos(tt * 1.5);
+            kb[Input.PAD_LY] = Math.sin(tt * 1.5);
+            kb[Input.PAD_RX] = Math.cos(tt * 0.7);
+            kb[Input.PAD_RY] = Math.sin(tt * 0.7);
+            kb[Input.PAD_RT] = int(tt * 2) % 2;
+         }
+         var b:ByteArray = padBytes;
+         b.length = 0;
          b.writeByte(PAD_CONTROLS.length);
          var id:String = null;
          var v:Number = NaN;
-         var q:Array = [];
+         var q:int = 0;
+         var i:int = 0;
+         var changed:Boolean = false;
          for each(id in PAD_CONTROLS)
          {
             v = Number(values[id]) || 0;
@@ -1549,16 +2109,27 @@ package Tools
             {
                v = kb[id];
             }
-            q.push(Math.round(Math.max(-1,Math.min(1,v)) * 127));
-            b.writeByte(q[q.length - 1]);
+            q = Math.round(Math.max(-1,Math.min(1,v)) * 127);
+            if(lastPad[i] !== q)
+            {
+               lastPad[i] = q;
+               changed = true;
+            }
+            b.writeByte(q);
+            i++;
          }
-         // Sent the moment it changes, plus a refresh every 100 ms.
-         var bytesKey:String = q.join(",");
-         if(bytesKey != lastPadBytes || getTimer() - lastPadSent > 100)
+         // Then the newest frame received, which acknowledges it (the host paces itself by these), and this
+         // input's number.
+         b.writeShort(lastFrameSeq & 65535);
+         // Sent the moment it changes or a frame arrives, plus a refresh every 100 ms.
+         if(changed || lastFrameSeq != ackedSeq || getTimer() - lastPadSent > 100)
          {
-            lastPadBytes = bytesKey;
+            ackedSeq = lastFrameSeq;
             lastPadSent = getTimer();
+            inputSeq = inputSeq + 1 & 65535;
+            b.writeShort(inputSeq);
             sendData(D_PAD,b);
+            recordInput(b);
          }
          // Holding BACK for 3 seconds leaves (ESC also works).
          if(Number(values[Input.PAD_BACK]) > 0.5)
@@ -1580,6 +2151,33 @@ package Tools
          }
       }
 
+      // The move and aim values the host will get from this input (same dead zones as Input.updatePad).
+      private static function recordInput(param1:ByteArray) : void
+      {
+         var i:int = 0;
+         if(!predPad)
+         {
+            predPad = Input.newPad();
+         }
+         while(i < PAD_CONTROLS.length)
+         {
+            padValues[PAD_CONTROLS[i]] = (param1[1 + i] << 24 >> 24) / 127;
+            i++;
+         }
+         Input.updatePad(predPad,padValues);
+         var now:int = getTimer();
+         inputs.push({
+            seq:inputSeq,
+            t:now,
+            mx:predPad.moveX,
+            my:predPad.moveY
+         });
+         while(inputs.length > 2 && now - inputs[1].t > 1500)
+         {
+            inputs.shift();
+         }
+      }
+
       private static function startMirror() : void
       {
          stopMirror();
@@ -1596,6 +2194,25 @@ package Tools
          arrivals = [];
          jitter = 0;
          bufferMs = 60;
+         playOffset = NaN;
+         lastRenderAt = 0;
+         frameGap = 33;
+         lastFrameT = -1;
+         underruns = 0;
+         prevSnap = null;
+         entryPool = [];
+         chunkBuf = null;
+         lastFrameSeq = ackedSeq = -1;
+         lastPad = [];
+         poolState = [];
+         inputs = [];
+         predPad = null;
+         p2OffX = p2OffY = p2ErrX = p2ErrY = p2CurX = p2CurY = 0;
+         p2PredSn = -1;
+         p2PredFrom = null;
+         lastP2 = null;
+         predLog = [];
+         predErr = lagErr = 0;
          view = new Sprite();
          view.mouseEnabled = false;
          view.mouseChildren = false;
@@ -1663,6 +2280,10 @@ package Tools
          gstate = {};
          pool = [];
          poolFilter = [];
+         poolState = [];
+         prevSnap = null;
+         entryPool = [];
+         chunkBuf = null;
          if(savedMute)
          {
             GameSound.globalSoundMute = savedMute[0];
@@ -1686,44 +2307,79 @@ package Tools
       }
 
       // Frames are shown a little behind the host, at a steady pace, with movement blended between frames, so
-      // uneven network arrival doesn't show as stutter. The delay follows the measured jitter.
+      // uneven network arrival doesn't show as stutter. The delay follows the measured jitter; when it changes,
+      // playback runs slightly slower or faster until it matches instead of jumping. If the next frame is late,
+      // moving pictures carry on along their last motion for up to 100 ms.
       private static function renderGuest() : void
       {
          if(snaps.length == 0)
          {
             return;
          }
-         var target:Number = Math.max(45,Math.min(400,jitter + 40));
-         if(target > bufferMs)
+         var now:int = getTimer();
+         var dt:Number = lastRenderAt > 0 ? Math.min(100,now - lastRenderAt) : 16;
+         lastRenderAt = now;
+         bufferMs = Math.max(35,Math.min(300,jitter + frameGap * 1.2 + 5));
+         var want:Number = clockBase + bufferMs;
+         if(isNaN(playOffset) || want - playOffset > 150 || playOffset - want > 250)
          {
-            bufferMs = target;
+            playOffset = want;
+         }
+         else if(want > playOffset)
+         {
+            playOffset += Math.min(want - playOffset,dt * 0.15);
          }
          else
          {
-            bufferMs += (target - bufferMs) * 0.01;
+            playOffset -= Math.min(playOffset - want,dt * 0.06);
          }
-         var rt:Number = getTimer() - clockBase - bufferMs;
+         var rt:Number = now - playOffset;
          // Way behind (e.g. after a hitch): skip ahead rather than playing old frames.
          while(snaps.length > 2 && rt - snaps[0].t > 600)
          {
-            snaps.shift();
+            retire(snaps.shift());
          }
          while(snaps.length >= 2 && snaps[1].t <= rt)
          {
-            snaps.shift();
+            retire(snaps.shift());
          }
          var s0:Object = snaps[0];
          var s1:Object = snaps.length > 1 ? snaps[1] : null;
-         var f:Number = s1 && rt > s0.t && s1.t > s0.t ? Math.min(1,(rt - s0.t) / (s1.t - s0.t)) : 0;
+         var f:Number = 0;
+         var ex:Number = 0;
+         if(s1)
+         {
+            f = rt > s0.t && s1.t > s0.t ? Math.min(1,(rt - s0.t) / (s1.t - s0.t)) : 0;
+            s0.late = false;
+         }
+         else if(rt > s0.t && prevSnap && s0.t > prevSnap.t)
+         {
+            ex = Math.min(rt - s0.t,100) / (s0.t - prevSnap.t);
+            if(!s0.late)
+            {
+               s0.late = true;
+               ++underruns;
+            }
+         }
          if(!s0.done)
          {
             s0.done = true;
             applyChannels(s0.chans);
          }
-         drawSnapshot(s0,s1,f);
+         updatePrediction(s0,s1,f,now);
+         drawSnapshot(s0,s1,f,prevSnap,ex);
       }
 
-      private static function drawSnapshot(param1:Object, param2:Object, param3:Number) : void
+      private static function retire(param1:Object) : void
+      {
+         if(prevSnap)
+         {
+            releaseSnap(prevSnap);
+         }
+         prevSnap = param1;
+      }
+
+      private static function drawSnapshot(param1:Object, param2:Object, param3:Number, param4:Object, param5:Number) : void
       {
          var list:Array = param1.list;
          var n:int = int(list.length);
@@ -1734,7 +2390,10 @@ package Tools
          var bd:BitmapData = null;
          var m:Matrix = tmpMatrix;
          var ct:ColorTransform = null;
-         var g:Number = NaN;
+         var ps:Object = null;
+         var smooth:Boolean = false;
+         var p2set:Object = param1.p2 && (p2OffX != 0 || p2OffY != 0 || p2CurX != 0 || p2CurY != 0) ? param1.p2.set : null;
+         var p2cur:int = param1.p2 ? int(param1.p2.cursor) : -1;
          while(k < n)
          {
             e = list[k];
@@ -1744,8 +2403,16 @@ package Tools
                bmp = new Bitmap();
                pool[k] = bmp;
                poolFilter[k] = 0;
+               poolState[k] = {
+                  a:NaN,
+                  al:NaN,
+                  col:null,
+                  fl:-1,
+                  smooth:false
+               };
                layer.addChild(bmp);
             }
+            ps = poolState[k];
             bd = images[e.img];
             if(!bd)
             {
@@ -1756,6 +2423,8 @@ package Tools
             if(bmp.bitmapData != bd)
             {
                bmp.bitmapData = bd;
+               // Assigning bitmapData resets smoothing.
+               ps.smooth = false;
             }
             m.a = e.a;
             m.b = e.b;
@@ -1763,32 +2432,80 @@ package Tools
             m.d = e.d;
             m.tx = e.tx;
             m.ty = e.ty;
-            g = 1;
-            e1 = param2 && param3 > 0 ? param2.byId[e.oid] : null;
             // Blend toward the next frame, unless the object jumped (teleport, new room) or changed picture.
-            if(e1 && e1.img == e.img && Math.abs(e1.tx - e.tx) + Math.abs(e1.ty - e.ty) < 80 && Math.abs(e1.a - e.a) + Math.abs(e1.b - e.b) + Math.abs(e1.c - e.c) + Math.abs(e1.d - e.d) < 0.8)
+            if(param3 > 0)
             {
-               m.a += (e1.a - e.a) * param3;
-               m.b += (e1.b - e.b) * param3;
-               m.c += (e1.c - e.c) * param3;
-               m.d += (e1.d - e.d) * param3;
-               m.tx += (e1.tx - e.tx) * param3;
-               m.ty += (e1.ty - e.ty) * param3;
+               e1 = e.next;
+               if(e1 && e1.sn == param2.sn && e1.oid == e.oid && e1.img == e.img && Math.abs(e1.tx - e.tx) + Math.abs(e1.ty - e.ty) < 80 && Math.abs(e1.a - e.a) + Math.abs(e1.b - e.b) + Math.abs(e1.c - e.c) + Math.abs(e1.d - e.d) < 0.8)
+               {
+                  m.a += (e1.a - e.a) * param3;
+                  m.b += (e1.b - e.b) * param3;
+                  m.c += (e1.c - e.c) * param3;
+                  m.d += (e1.d - e.d) * param3;
+                  m.tx += (e1.tx - e.tx) * param3;
+                  m.ty += (e1.ty - e.ty) * param3;
+               }
             }
-            bmp.smoothing = (e.fl & 128) != 0;
-            bmp.transform.matrix = m;
-            ct = new ColorTransform(1,1,1,e.al);
-            if(e.col)
+            else if(param5 > 0)
             {
-               ct.redMultiplier = e.col[0] / 256;
-               ct.greenMultiplier = e.col[1] / 256;
-               ct.blueMultiplier = e.col[2] / 256;
-               ct.redOffset = e.col[3];
-               ct.greenOffset = e.col[4];
-               ct.blueOffset = e.col[5];
+               // The next frame is late: keep moving along the last step (position only).
+               e1 = e.prev;
+               if(e1 && e1.sn == param4.sn && e1.oid == e.oid && !(p2set && (p2set[e.oid] || e.oid == p2cur)) && e1.img == e.img && Math.abs(e1.tx - e.tx) + Math.abs(e1.ty - e.ty) < 40)
+               {
+                  m.tx += (e.tx - e1.tx) * param5;
+                  m.ty += (e.ty - e1.ty) * param5;
+               }
             }
-            bmp.transform.colorTransform = ct;
-            bmp.blendMode = BLENDS[e.fl & 127] || BlendMode.NORMAL;
+            if(p2set)
+            {
+               if(p2set[e.oid])
+               {
+                  m.tx += p2OffX;
+                  m.ty += p2OffY;
+               }
+               else if(e.oid == p2cur)
+               {
+                  m.tx += p2CurX;
+                  m.ty += p2CurY;
+               }
+            }
+            smooth = (e.fl & 128) != 0;
+            if(ps.smooth != smooth)
+            {
+               ps.smooth = smooth;
+               bmp.smoothing = smooth;
+            }
+            if(ps.a != m.a || ps.b != m.b || ps.c != m.c || ps.d != m.d || ps.tx != m.tx || ps.ty != m.ty)
+            {
+               ps.a = m.a;
+               ps.b = m.b;
+               ps.c = m.c;
+               ps.d = m.d;
+               ps.tx = m.tx;
+               ps.ty = m.ty;
+               bmp.transform.matrix = m;
+            }
+            if(ps.al != e.al || ps.col != e.col)
+            {
+               ps.al = e.al;
+               ps.col = e.col;
+               ct = new ColorTransform(1,1,1,e.al);
+               if(e.col)
+               {
+                  ct.redMultiplier = e.col[0] / 256;
+                  ct.greenMultiplier = e.col[1] / 256;
+                  ct.blueMultiplier = e.col[2] / 256;
+                  ct.redOffset = e.col[3];
+                  ct.greenOffset = e.col[4];
+                  ct.blueOffset = e.col[5];
+               }
+               bmp.transform.colorTransform = ct;
+            }
+            if(ps.fl != (e.fl & 127))
+            {
+               ps.fl = e.fl & 127;
+               bmp.blendMode = BLENDS[e.fl & 127] || BlendMode.NORMAL;
+            }
             if(poolFilter[k] != e.fid)
             {
                poolFilter[k] = e.fid;
@@ -1812,7 +2529,7 @@ package Tools
             {
                statsText.parent.removeChild(statsText);
             }
-            bytesOut = bytesIn = framesIn = 0;
+            bytesOut = bytesIn = framesIn = framesSkipped = 0;
             statsAt = getTimer();
             return;
          }
@@ -1842,14 +2559,19 @@ package Tools
          var line:String = "ONLINE OFF";
          if(mode == 1)
          {
-            line = "HOST  capture " + captureMs.toFixed(1) + " ms   upload " + Math.round(bytesOut / 1024 / secs) + " KB/s   backlog " + Math.round((sock ? sock.bytesPending : 0) / 1024) + " KB   objects " + frameCount + "   " + (peer ? "friend connected" : "waiting");
+            line = "HOST  rtt " + Math.round(rtt) + " (min " + Math.round(rttMin) + ") ms  server " + pingText() + "  up " + Math.round(bytesOut / 1024 / secs) + " KB/s  capture " + captureMs.toFixed(1) + " ms  skipped " + framesSkipped + "  pics " + bulk.length + "/" + Math.round(bulkWindow / 1024) + "K  obj " + frameCount + (peer ? "" : "  waiting");
          }
          else if(mode == 2)
          {
-            line = "GUEST  download " + Math.round(bytesIn / 1024 / secs) + " KB/s   frames " + Math.round(framesIn / secs) + "/s   jitter " + Math.round(jitter) + " ms   delay " + Math.round(bufferMs) + " ms   queued " + snaps.length;
+            line = "GUEST  rtt " + Math.round(hostRtt) + " ms  server " + pingText() + "  down " + Math.round(bytesIn / 1024 / secs) + " KB/s  frames " + Math.round(framesIn / secs) + "/s  jitter " + Math.round(jitter) + "  delay " + Math.round(isNaN(playOffset) ? 0 : playOffset - clockBase) + " ms  late " + underruns + "  queued " + snaps.length + "  p2 off " + Math.round(lagErr) + ">" + Math.round(predErr) + " px";
          }
-         bytesOut = bytesIn = framesIn = 0;
+         bytesOut = bytesIn = framesIn = framesSkipped = 0;
          statsText.text = " " + line + "   (F8)";
+      }
+
+      private static function pingText() : String
+      {
+         return serverPing < 0 ? "?" : Math.round(serverPing) + " ms";
       }
 
       private static function onHostData(param1:ByteArray) : void
@@ -1862,6 +2584,23 @@ package Tools
          else if(kind == D_FRAME)
          {
             readFrame(param1);
+         }
+         else if(kind == D_CHUNK)
+         {
+            // Pieces of one big message, in order; the last one completes it.
+            var last:Boolean = param1.readUnsignedByte() == 1;
+            if(!chunkBuf)
+            {
+               chunkBuf = new ByteArray();
+            }
+            param1.readBytes(chunkBuf,chunkBuf.length,param1.bytesAvailable);
+            if(last)
+            {
+               var whole:ByteArray = chunkBuf;
+               chunkBuf = null;
+               whole.position = 0;
+               onHostData(whole);
+            }
          }
          else if(kind == D_IMAGEREF)
          {
@@ -1913,6 +2652,11 @@ package Tools
       private static function readJpeg(param1:ByteArray) : void
       {
          var id:int = readVar(param1);
+         if(pendingJpeg[id])
+         {
+            pendingJpeg[id].push(param1);
+            return;
+         }
          var isNew:Boolean = param1.readUnsignedByte() == 1;
          var w:int = param1.readUnsignedShort();
          var h:int = param1.readUnsignedShort();
@@ -2151,14 +2895,17 @@ package Tools
          bytes.uncompress();
          bytes.position = 0;
          var t:Number = bytes.readUnsignedInt();
+         lastFrameSeq = bytes.readUnsignedShort();
+         hostRtt = bytes.readUnsignedShort();
          var count:int = readVar(bytes);
          var list:Array = new Array(count);
-         var byId:Object = {};
+         var sn:int = ++snapSerial;
          var k:int = 0;
          var oid:int = 0;
          var mask:int = 0;
          var st:Object = null;
          var e:Object = null;
+         var now:int = getTimer();
          ++framesIn;
          while(k < count)
          {
@@ -2178,7 +2925,8 @@ package Tools
                   al:1,
                   col:null,
                   fid:0,
-                  fl:0
+                  fl:0,
+                  last:null
                };
                gstate[oid] = st;
             }
@@ -2214,37 +2962,49 @@ package Tools
             {
                st.fl = bytes.readUnsignedByte();
             }
-            st.seen = getTimer();
-            e = {
-               oid:oid,
-               img:st.img,
-               tx:st.tx,
-               ty:st.ty,
-               a:st.a,
-               b:st.b,
-               c:st.c,
-               d:st.d,
-               al:st.al,
-               col:st.col,
-               fid:st.fid,
-               fl:st.fl
-            };
+            st.seen = now;
+            e = entryPool.length > 0 ? entryPool.pop() : {};
+            e.sn = sn;
+            e.img = st.img;
+            e.tx = st.tx;
+            e.ty = st.ty;
+            e.a = st.a;
+            e.b = st.b;
+            e.c = st.c;
+            e.d = st.d;
+            e.al = st.al;
+            e.col = st.col;
+            e.fid = st.fid;
+            e.fl = st.fl;
+            e.oid = oid;
+            e.next = null;
+            e.prev = null;
+            // Link to this object's entry in the previous frame, both ways. Entries are recycled, so a link
+            // counts only while the entry still has this object and the expected frame serial.
+            if(st.last && st.last.sn == sn - 1 && st.last.oid == oid)
+            {
+               st.last.next = e;
+               e.prev = st.last;
+            }
+            st.last = e;
             list[k] = e;
-            byId[oid] = e;
             k++;
          }
+         var chans:Array = readChannels(bytes);
+         var p2:Object = bytes.bytesAvailable > 0 ? readPlayer2(bytes,now,t) : null;
          snaps.push({
             t:t,
+            sn:sn,
+            arr:now,
             list:list,
-            byId:byId,
-            chans:readChannels(bytes),
+            chans:chans,
+            p2:p2,
             done:false
          });
          trackArrival(t);
          // Object states the host has long forgotten (it resends them in full) can go.
          if(frameNo % 300 == 0)
          {
-            var now:int = getTimer();
             var key:String = null;
             for(key in gstate)
             {
@@ -2256,11 +3016,260 @@ package Tools
          }
       }
 
-      // Jitter = how much later than the earliest-arriving frame of the last 10 s frames arrive: the 95th
-      // percentile over the last 3 s, so one stray late packet doesn't add delay for everything after it.
+      private static function readPlayer2(param1:ByteArray, param2:int, param3:Number) : Object
+      {
+         if(param1.readUnsignedByte() != 1)
+         {
+            lastP2 = null;
+            return null;
+         }
+         var p:Object = {
+            t:param3,
+            x:param1.readShort() / 4,
+            y:param1.readShort() / 4,
+            dx:param1.readFloat(),
+            dy:param1.readFloat(),
+            seq:param1.readUnsignedShort(),
+            flags:param1.readUnsignedByte(),
+            sx:param1.readShort(),
+            ex:param1.readShort(),
+            sy:param1.readShort(),
+            ey:param1.readShort(),
+            hw:param1.readUnsignedByte(),
+            hh:param1.readUnsignedByte(),
+            ax:param1.readShort() / 4,
+            ay:param1.readShort() / 4,
+            set:{},
+            cursor:0,
+            blockX:0,
+            blockY:0
+         };
+         var n:int = readVar(param1);
+         while(n-- > 0)
+         {
+            p.set[readVar(param1)] = true;
+         }
+         p.cursor = readVar(param1);
+         // Pushing against something (a crate, a closed door): the host's player 2 barely moves although the
+         // stick says go. Don't predict movement that way.
+         var inp:Object = inputAt(p.seq);
+         if(lastP2 && inp && param3 > lastP2.t)
+         {
+            var ticks:Number = (param3 - lastP2.t) / 10;
+            if(Math.abs(inp.mx) > 0.3 && Math.abs(p.x - lastP2.x) / ticks < 0.4)
+            {
+               p.blockX = inp.mx > 0 ? 1 : -1;
+            }
+            if(Math.abs(inp.my) > 0.3 && Math.abs(p.y - lastP2.y) / ticks < 0.4)
+            {
+               p.blockY = inp.my > 0 ? 1 : -1;
+            }
+         }
+         lastP2 = p;
+         // Stats: what the guest drew for "now" at the time this state corresponds to, vs. this state.
+         var tau:Number = inputTime(p,param2);
+         var e:Object = null;
+         for each(e in predLog)
+         {
+            if(e.t >= tau)
+            {
+               predErr += (Math.sqrt((e.px - p.x) * (e.px - p.x) + (e.py - p.y) * (e.py - p.y)) - predErr) * 0.05;
+               lagErr += (Math.sqrt((e.hx - p.x) * (e.hx - p.x) + (e.hy - p.y) * (e.hy - p.y)) - lagErr) * 0.05;
+               break;
+            }
+         }
+         return p;
+      }
+
+      // The input with this number (or the newest before it).
+      private static function inputAt(param1:int) : Object
+      {
+         var i:int = inputs.length - 1;
+         while(i >= 0)
+         {
+            if((param1 - inputs[i].seq & 65535) < 32768)
+            {
+               return inputs[i];
+            }
+            i--;
+         }
+         return null;
+      }
+
+      // The guest time whose input the host had just applied when it captured this state: about a round trip
+      // before the frame arrived, but after the last input it had and before the first it didn't.
+      private static function inputTime(param1:Object, param2:int) : Number
+      {
+         var tau:Number = param2 - hostRtt;
+         var i:int = inputs.length - 1;
+         while(i >= 0)
+         {
+            if((param1.seq - inputs[i].seq & 65535) < 32768)
+            {
+               tau = Math.max(tau,inputs[i].t);
+               if(i + 1 < inputs.length)
+               {
+                  tau = Math.min(tau,inputs[i + 1].t);
+               }
+               return tau;
+            }
+            i--;
+         }
+         return tau;
+      }
+
+      // Where player 2 will be once the host has applied every input sent so far: the newest host state, moved
+      // on by the inputs since, 10 ms at a time like the game.
+      private static function predictPlayer2(param1:Object, param2:int, param3:int) : Point
+      {
+         var tau:Number = inputTime(param1,param2);
+         var end:Number = param3;
+         if(end - tau > 400)
+         {
+            tau = end - 400;
+         }
+         var x:Number = param1.x;
+         var y:Number = param1.y;
+         var dx:Number = param1.dx;
+         var dy:Number = param1.dy;
+         var i:int = 0;
+         var inp:Object = null;
+         var mx:Number = 0;
+         var my:Number = 0;
+         var step:Number = 0;
+         while(tau < end)
+         {
+            while(i < inputs.length && inputs[i].t <= tau)
+            {
+               inp = inputs[i];
+               i++;
+            }
+            mx = inp ? Number(inp.mx) : 0;
+            my = inp ? Number(inp.my) : 0;
+            dx = (dx + mx * 0.2) * 0.85;
+            dy = (dy + my * 0.2) * 0.85;
+            // The last step is partial, so the drawn position moves smoothly between game ticks.
+            step = Math.min(1,(end - tau) / 10);
+            if(!(param1.blockX != 0 && (dx > 0 ? 1 : -1) == param1.blockX))
+            {
+               x += dx * 2 * step;
+            }
+            if(!(param1.blockY != 0 && (dy > 0 ? 1 : -1) == param1.blockY))
+            {
+               y += dy * 2 * step;
+            }
+            tau += 10;
+         }
+         // Room edges, as in PlayerBase._update (doorways are open when the host says player 2 can move rooms).
+         if(Math.abs(y - 300) > 18 || (param1.flags & 1) == 0)
+         {
+            x = Math.max(param1.sx + param1.hw + 5,Math.min(param1.ex - param1.hw - 5,x));
+         }
+         else if(x - param1.hw < param1.sx || x + param1.hw > param1.ex)
+         {
+            y = Math.max(300 - 18,Math.min(300 + 18,y));
+         }
+         if(Math.abs(x - 400) > 18 || (param1.flags & 2) == 0)
+         {
+            y = Math.max(param1.sy + param1.hh + 5,Math.min(param1.ey - param1.hh - 5,y));
+         }
+         else if(y - param1.hh < param1.sy || y + param1.hh > param1.ey)
+         {
+            x = Math.max(400 - 18,Math.min(400 + 18,x));
+         }
+         return new Point(x,y);
+      }
+
+      // Guest, each frame: how far to move player 2's pictures (and where to put the reticle) from where the shown
+      // host frame has them.
+      private static function updatePrediction(param1:Object, param2:Object, param3:Number, param4:int) : void
+      {
+         var latest:Object = snaps[snaps.length - 1];
+         var S:Object = latest.p2;
+         var d0:Object = param1.p2;
+         if(!d0 || !S || config["predict"] == "0")
+         {
+            // Nothing to predict (falling, teleporting, down): ease back to the host's picture.
+            p2OffX *= 0.8;
+            p2OffY *= 0.8;
+            p2ErrX = p2ErrY = 0;
+            p2CurX = p2CurY = 0;
+            p2PredSn = -1;
+            p2PredFrom = null;
+            return;
+         }
+         var d1:Object = param2 && param2.p2 ? param2.p2 : d0;
+         var hx:Number = d0.x + (d1.x - d0.x) * param3;
+         var hy:Number = d0.y + (d1.y - d0.y) * param3;
+         var pred:Point = predictPlayer2(S,latest.arr,param4);
+         var rawX:Number = pred.x - hx;
+         var rawY:Number = pred.y - hy;
+         if(latest.sn != p2PredSn)
+         {
+            // A new host state moved the prediction: keep the drawn position where it was (the old prediction
+            // for the same moment) and fade the difference out, unless it's far off (a teleport, or a hit pushed
+            // player 2).
+            if(p2PredSn >= 0 && p2PredFrom)
+            {
+               var old:Point = predictPlayer2(p2PredFrom.p2,p2PredFrom.arr,param4);
+               p2ErrX += old.x - pred.x;
+               p2ErrY += old.y - pred.y;
+               if(p2ErrX * p2ErrX + p2ErrY * p2ErrY > 48 * 48)
+               {
+                  p2ErrX = p2ErrY = 0;
+               }
+            }
+            p2PredSn = latest.sn;
+            p2PredFrom = latest;
+         }
+         p2ErrX *= 0.8;
+         p2ErrY *= 0.8;
+         p2OffX = rawX + p2ErrX;
+         p2OffY = rawY + p2ErrY;
+         // The reticle: at the predicted position plus this player's own aim.
+         var aimX:Number = predPad ? Number(predPad.aimX) : 0;
+         var aimY:Number = predPad ? Number(predPad.aimY) : -1;
+         var hax:Number = d0.ax + (d1.ax - d0.ax) * param3;
+         var hay:Number = d0.ay + (d1.ay - d0.ay) * param3;
+         p2CurX = hx + p2OffX + aimX * Input.aimRadius - hax;
+         p2CurY = hy + p2OffY + aimY * Input.aimRadius - hay;
+         predLog.push({
+            t:param4,
+            px:hx + p2OffX,
+            py:hy + p2OffY,
+            hx:hx,
+            hy:hy
+         });
+         while(predLog.length > 0 && param4 - predLog[0].t > 1000)
+         {
+            predLog.shift();
+         }
+      }
+
+      // A snapshot that's no longer needed: its entries go back to the pool.
+      private static function releaseSnap(param1:Object) : void
+      {
+         var e:Object = null;
+         for each(e in param1.list)
+         {
+            e.sn = -1;
+            e.prev = e.next = null;
+            entryPool.push(e);
+         }
+         param1.list = null;
+      }
+
+      // Jitter = how much later than the earliest-arriving frame of the last 10 s frames arrive: the 90th
+      // percentile over the last 3 s, so a stray late packet doesn't add delay for everything after it (late
+      // frames are covered by extrapolation instead).
       private static function trackArrival(param1:Number) : void
       {
          var now:int = getTimer();
+         if(lastFrameT >= 0 && param1 > lastFrameT && param1 - lastFrameT < 500)
+         {
+            frameGap += (param1 - lastFrameT - frameGap) * 0.05;
+         }
+         lastFrameT = param1;
          var d:Number = now - param1;
          arrivals.push([now,d]);
          while(arrivals.length > 0 && now - arrivals[0][0] > 10000)
@@ -2286,7 +3295,7 @@ package Tools
          }
          recent.sort(Array.NUMERIC);
          clockBase = base;
-         jitter = recent.length > 0 ? Number(recent[Math.min(recent.length - 1,int(recent.length * 0.95))]) : 0;
+         jitter = recent.length > 0 ? Number(recent[Math.min(recent.length - 1,int(recent.length * 0.9))]) : 0;
       }
 
       private static function readChannels(param1:ByteArray) : Array

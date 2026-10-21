@@ -529,6 +529,7 @@ package Scenes
             removePlayer2();
          }
          var _loc1_:Boolean = Boolean(player2) && !player2._removed;
+         Net.watchPlayer2(player2);
          Input.i.p2Active = _loc1_;
          Input.i.p2Present = player2 != null;
          if(player2 && player2._removed)

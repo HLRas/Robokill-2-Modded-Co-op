@@ -235,6 +235,12 @@ package Tools
          aimFrame = frame;
       }
 
+      // Player 2's green reticle (online: the guest draws it at its own aim).
+      public function p2CursorSprite() : Sprite
+      {
+         return p2Cursor;
+      }
+
       // Called by player 2 each frame with its aim point, for the green reticle.
       public function setP2Aim(param1:Number, param2:Number) : void
       {
@@ -830,7 +836,7 @@ package Tools
          if(Net.remotePad)
          {
             remoteIndex = all.length;
-            all.push(Net.remotePad);
+            all.push(Net.takeRemotePad());
          }
          var n:int = int(all.length);
          if(n >= 2)

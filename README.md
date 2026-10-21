@@ -71,9 +71,13 @@ A friend can join over the internet as Player 2.
 
 **Setup:** nothing. The exe connects to a built-in server, a small free relay on Oracle Cloud in Johannesburg. To run your own, see [relay/README.md](relay/README.md) and set `relay=<ip>:7777` in `online.txt` next to the exe (both players).
 
-How it works: the host's game does everything. Your friend's copy runs no game logic: it shows a live copy of the host's screen and sends its controller back. Pictures the friend's copy already has are sent by name, text as text, and each frame only says what moved; the friend's copy plays frames a little behind (as little as the connection's jitter allows) and blends movement between them at 60 fps, so it stays smooth. That needs about 10–40 KB/s from the host, with short bursts on new rooms. Both players must run the same version of the exe.
+How it works: the host's game does everything. Your friend's copy runs no game logic: it shows a live copy of the host's screen and sends its controller back. Pictures the friend's copy already has are sent by name, text as text, and each frame only says what moved; the friend's copy plays frames a little behind (as little as the connection's jitter allows) and blends movement between them at 60 fps, so it stays smooth. That needs about 10–40 KB/s from the host, plus pictures on new rooms. Both players must run the same version of the exe.
 
-Press **F8** on either side for live stats (upload/download, jitter, playback delay).
+- **Your own robot moves straight away.** The friend's copy draws Player 2 (body, legs, guns, shadow and the green crosshair) where its own input is taking it, replaying that input with the game's movement maths instead of waiting a round trip for the host. A correction from the host blends in smoothly. Shots still come from the host. To turn this off, put `predict=0` in the friend's `online.txt`.
+- **No lag build-up on slow connections.** The friend's copy acknowledges every frame. The host only sends a new frame while the link isn't queueing, and sends pictures (new rooms, floor marks) in small pieces between frames, as fast as the link allows. A slow upload makes pictures arrive later instead of delaying everything.
+- **Quick taps count.** A button pressed and released between two frames still reaches the game.
+
+Press **F8** on either side for live stats: round trip between the players (`rtt`), ping to the server, upload/download, frames skipped and pictures waiting (host), jitter, playback delay, late frames, and how far Player 2 would be drawn from its real position without and with prediction (`p2 off 36>2 px`; guest).
 
 ## Save games
 

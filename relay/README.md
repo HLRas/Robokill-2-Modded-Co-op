@@ -48,6 +48,15 @@ Make two folders, each with a copy of the exe and an `online.txt`:
 
 Both copies share the same save file, so back up `robokill2.sol` first (see the main README).
 
+Testing aids:
+
+- `online.txt`: `stats=1` shows the F8 stats from the start; `testpad=1` (guest) walks Player 2 in circles and fires, so you can watch online play without a second person.
+- Relay: `--delay MS` and `--jitter MS` add network delay each way (order is kept, as with TCP); `--rate KB` limits each direction to that many KB/s, with a queue in front like a home router. With `--stats` and `--rate`, the log shows the worst queue delay to the guest, which is the lag that builds up.
+
+```sh
+python relay/relay.py --fixed-code TEST --stats --delay 30 --jitter 15 --rate 60
+```
+
 ## Protocol
 
 Every message is `u32 length` (big-endian, includes the type byte), `u8 type`, payload. Strings are `u16 length` + UTF-8.
@@ -57,10 +66,13 @@ Every message is `u32 length` (big-endian, includes the type byte), `u8 type`, p
 | 1 HOST | client → relay | version |
 | 2 JOIN | client → relay | code, version |
 | 3 DATA | both | game data, forwarded to the other player |
-| 4 PING | client → relay | (keep-alive) |
+| 4 PING | client → relay | any bytes (sent every 2 s; also a keep-alive) |
 | 10 CODE | relay → host | join code |
 | 11 PEER_JOINED | relay → both | |
 | 12 PEER_LEFT | relay → remaining player | |
 | 13 ERROR | relay → client | message |
+| 14 PONG | relay → client | the PING's bytes, for measuring the round trip to the relay |
+
+The relay acknowledges data immediately (`TCP_QUICKACK`, since Flash can't turn off Nagle's algorithm and its small writes wait for that acknowledgement) and keeps its send buffers small: when one player can't keep up, it stops reading from the other, so the backlog shows up on the sender (which then skips frames) instead of piling up in the relay. An older relay still works with the game, but the F8 stats show the server ping as `?`.
 
 The game data itself is defined in `src/scripts/Tools/Net.as`.

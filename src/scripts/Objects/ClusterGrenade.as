@@ -37,12 +37,23 @@ package Objects
          emitConditionalParticles("GasTankDestroy");
          Sounds.gasTankDestroy.play();
          var _loc1_:int = 0;
-         while(_loc1_ < 10 * charge)
+         // Online, a copy of the guest's grenade: the guest's bomblets (drift and fuse), which don't hit enemies
+         // themselves (Net).
+         var _loc3_:Array = vars["netBombs"];
+         while(_loc3_ ? _loc1_ < _loc3_.length : _loc1_ < 10 * charge)
          {
             _loc2_ = new ClusterBomb(null,basex,basey);
             _loc2_.dx = (Math.random() - 0.5) * 2 * speed;
             _loc2_.dy = (Math.random() - 0.5) * 2 * speed;
             _loc2_.wep = wep;
+            if(_loc3_)
+            {
+               _loc2_.dx = _loc3_[_loc1_][0];
+               _loc2_.dy = _loc3_[_loc1_][1];
+               _loc2_.killTime = _loc3_[_loc1_][2];
+               _loc2_.vars["netKillTime"] = _loc3_[_loc1_][2];
+               _loc2_.vars["netShot"] = true;
+            }
             _loc1_++;
          }
          super.kill();

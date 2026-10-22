@@ -67,6 +67,12 @@ package Objects
             initialTargetY = Math.random() * 600;
             lastTargetX = source is PlayerBase ? PlayerBase(source).lockTargetX : Input.i.mouseX();
             lastTargetY = source is PlayerBase ? PlayerBase(source).lockTargetY : Input.i.mouseY();
+            // Online, a copy of the guest's rocket: it homes on the guest's target (Net).
+            if(vars["netTarget"])
+            {
+               lastTargetX = vars["netTargetX"];
+               lastTargetY = vars["netTargetY"];
+            }
          }
          var _loc1_:Array = light;
          if(wep.level == 1)

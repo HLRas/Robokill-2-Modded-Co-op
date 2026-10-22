@@ -15,3 +15,5 @@ GameLevels/GameLevel.as
 Objects/Door.as
 ObjectBase/LaserBulletBase.as
 ObjectBase/FastLaserBulletBase.as
+Objects/ClusterGrenade.as
+Objects/ClusterBomb.as

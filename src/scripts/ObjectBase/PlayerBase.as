@@ -2822,7 +2822,12 @@ package ObjectBase
                   _loc2_ = WeaponBase(weapons[_loc1_]);
                   if(partner && Net.guestFires(_loc2_))
                   {
-                     // Online, player 2's guest fires this gun itself (see Net).
+                     // Online, player 2's guest fires this gun itself (see Net); a charge weapon shows the guest's
+                     // charge (for the full-charge flash).
+                     if(_loc2_.charges())
+                     {
+                        _loc2_.charge = Net.p2Charge(_loc1_);
+                     }
                   }
                   else if(_loc2_.charges())
                   {
@@ -2844,7 +2849,14 @@ package ObjectBase
                if(weapons[_loc1_])
                {
                   _loc2_ = WeaponBase(weapons[_loc1_]);
-                  if(_loc2_.charges())
+                  if(partner && Net.guestFires(_loc2_))
+                  {
+                     if(_loc2_.charges())
+                     {
+                        _loc2_.charge = Net.p2Charge(_loc1_);
+                     }
+                  }
+                  else if(_loc2_.charges())
                   {
                      if(_loc2_.charge > 0)
                      {

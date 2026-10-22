@@ -51,7 +51,8 @@ package Objects
             {
                if(_loc1_ is EnemyBase)
                {
-                  if(distanceToObject(_loc1_) < 60)
+                  // (Online, a copy of the guest's bomblet: the guest decides which enemies it hits; Net.)
+                  if(distanceToObject(_loc1_) < 60 && !vars["netShot"])
                   {
                      EnemyBase(_loc1_).hitBy(null,wep.damage());
                   }
@@ -79,6 +80,10 @@ package Objects
          addFilter(heightFilter);
          doCollisions = false;
          killTime = 30 + Math.random() * 30;
+         if(vars["netKillTime"])
+         {
+            killTime = vars["netKillTime"];
+         }
          super._init();
       }
       

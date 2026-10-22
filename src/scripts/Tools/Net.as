@@ -11,10 +11,15 @@ package Tools
    import ObjectBase.PickupBase;
    import ObjectBase.PlayerBase;
    import ObjectBase.TreasureChestBase;
+   import Objects.ChargeRocket;
+   import Objects.ClusterGrenade;
    import Objects.FloorProp;
    import Objects.Vent;
    import WeaponPlugin.WeaponPluginFlyThrough;
    import Weapons.Blaster;
+   import Weapons.ChargeGrenades;
+   import Weapons.ChargeLaser;
+   import Weapons.ChargeRockets;
    import Weapons.Grenade;
    import Weapons.Laser;
    import Weapons.Shredder;
@@ -129,6 +134,13 @@ package Tools
 
       private static var rMouseMoved:Boolean = false;
 
+      // Host: the guest's charge level per gun slot (it charges player 2's charge weapons itself; the host shows
+      // the full-charge flash from these).
+      private static var rCharges:Array = [0,0,0,0];
+
+      // Guest: its charge level per gun slot.
+      private static var gCharges:Array = [0,0,0,0];
+
       // Host: the guest's latest controller values (same keys as a GameInput device), or null.
       public static var remotePad:Object = null;
 
@@ -202,9 +214,10 @@ package Tools
 
       // Guns whose shots the guest simulates itself (by WeaponBase class; see shotKind): their bullet sprites and
       // whether they're drawn additively. Other guns (lasers, charge weapons, shredder) are still fired by the host.
-      private static const SHOT_SPRITES:Array = [null,"ObjectConstructors::Bullet_constructor","ObjectConstructors::ShotgunBullet_constructor","ObjectConstructors::PulseBullet_constructor","ObjectConstructors::PulseShotgunBullet_constructor","ObjectConstructors::GrenadeBullet_constructor","ObjectConstructors::LaserBullet_constructor","ObjectConstructors::FastLaserBullet_constructor"];
+      private static const SHOT_SPRITES:Array = [null,"ObjectConstructors::Bullet_constructor","ObjectConstructors::ShotgunBullet_constructor","ObjectConstructors::PulseBullet_constructor","ObjectConstructors::PulseShotgunBullet_constructor","ObjectConstructors::GrenadeBullet_constructor","ObjectConstructors::LaserBullet_constructor","ObjectConstructors::FastLaserBullet_constructor","ObjectConstructors::ChargeLaserBullet_constructor","ObjectConstructors::ChargeRocket_constructor","ObjectConstructors::ClusterGrenade_constructor","ObjectConstructors::ClusterBomb_constructor"];
 
-      private static const SHOT_ADD:Array = [false,true,false,true,true,false,true,true];
+      // (8 charge laser beam, 9 charge rocket, 10 cluster grenade, 11 its bomblets.)
+      private static const SHOT_ADD:Array = [false,true,false,true,true,false,true,true,true,false,false,true];
 
       private static const GUN_OFFSET_X:Array = [6,-6,16,-16];
 
@@ -1360,7 +1373,7 @@ package Tools
          {
             if(o is BulletBase && o.vars["netShot"] && !o._removed && o.obj)
             {
-               markDisplay(o.obj,3);
+               markObjects(o,3);
             }
             if(o is EnemyBulletBase && !o._removed && o.obj && EnemyBulletBase(o).canHitPlayer)
             {
@@ -1378,7 +1391,7 @@ package Tools
       }
 
       // Guns the guest fires itself: 1 Blaster, 2 Shotgun, 3 PulseGun, 4 PlasmaShotgun, 5 Grenade, 6 Laser,
-      // 7 Shredder; 0 = the host fires it (the charge weapons).
+      // 7 Shredder, 8 ChargeLaser, 9 ChargeRockets, 10 ChargeGrenades; 0 = the host fires it.
       private static function shotKind(param1:Object) : int
       {
          if(param1 is Blaster)
@@ -1408,6 +1421,18 @@ package Tools
          if(param1 is Shredder)
          {
             return 7;
+         }
+         if(param1 is ChargeLaser)
+         {
+            return 8;
+         }
+         if(param1 is ChargeRockets)
+         {
+            return 9;
+         }
+         if(param1 is ChargeGrenades)
+         {
+            return 10;
          }
          return 0;
       }
@@ -1450,6 +1475,7 @@ package Tools
                param1.writeByte(w.offset & 255);
                param1.writeFloat(w.speedMult());
                param1.writeByte(piercing(w) ? 1 : 0);
+               param1.writeShort(w.charges() ? w.maxCharge : 0);
             }
             i++;
          }
@@ -1631,11 +1657,20 @@ package Tools
          var my:Number = param1.readFloat();
          var tx:Number = param1.readFloat();
          var ty:Number = param1.readFloat();
+         var charge:int = param1.readUnsignedShort();
          var n:int = param1.readUnsignedByte();
          var pellets:Array = [];
          while(n-- > 0)
          {
             pellets.push([param1.readFloat(),param1.readFloat()]);
+         }
+         // Per-pellet or per-bomblet random values: rockets' speeds and launch delay, cluster bomblets' drift
+         // and fuse.
+         var extras:Array = [];
+         n = param1.bytesAvailable > 0 ? param1.readUnsignedByte() : 0;
+         while(n-- > 0)
+         {
+            extras.push([param1.readFloat(),param1.readFloat(),param1.readFloat(),param1.readFloat()]);
          }
          var p:PlayerBase = player2;
          if(!p || p._removed || slot > 3)
@@ -1651,6 +1686,9 @@ package Tools
          var prev:PlayerBase = ms.player;
          ms.player = p;
          var n0:int = int(ms.objects.length);
+         var nChans:int = int(GameSoundChannel.allChannels.length);
+         var prevCharge:int = w.charge;
+         w.charge = charge;
          try
          {
             w.shoot(ms,mx,my,tx,ty);
@@ -1658,6 +1696,7 @@ package Tools
          catch(e:Error)
          {
          }
+         w.charge = prevCharge;
          ms.player = prev;
          var made:Array = [];
          var i:int = n0;
@@ -1682,15 +1721,31 @@ package Tools
             }
             b.source = null;
             b.vars["netShot"] = true;
+            var cr:ChargeRocket = b as ChargeRocket;
+            if(cr && i < extras.length)
+            {
+               cr.baseSpeed = extras[i][0];
+               cr.extraSpeed = extras[i][1];
+               cr.speedUpTime = extras[i][2];
+               cr.delay = extras[i][3];
+               cr.vars["netTarget"] = true;
+               cr.vars["netTargetX"] = tx;
+               cr.vars["netTargetY"] = ty;
+            }
+            if(b is ClusterGrenade)
+            {
+               b.vars["netBombs"] = extras;
+            }
             i++;
          }
          var now:int = getTimer();
          netShots[sid] = {
             t:now,
-            list:made
+            list:made,
+            w:w,
+            k:shotKind(w)
          };
          ++shotsCount;
-         var nChans:int = int(GameSoundChannel.allChannels.length);
          try
          {
             p.remoteShotEffects(w,slot);
@@ -1722,7 +1777,7 @@ package Tools
          var eid:int = readVar(param1);
          var shot:Object = netShots[sid];
          var p:PlayerBase = player2;
-         var b:BulletBase = shot ? shot.list[pellet] as BulletBase : null;
+         var b:BulletBase = shot ? shot.list[shot.k == 10 ? 0 : pellet] as BulletBase : null;
          var ms:MainScene = p ? p.gs as MainScene : null;
          if(!b || !ms || p._removed)
          {
@@ -1747,7 +1802,14 @@ package Tools
          b.source = p;
          try
          {
-            e.hitBy(b);
+            if(shot.k == 10)
+            {
+               e.hitBy(null,WeaponBase(shot.w).damage());
+            }
+            else
+            {
+               e.hitBy(b);
+            }
             ++hitsCount;
          }
          catch(err:Error)
@@ -3106,12 +3168,24 @@ package Tools
             rMouseX = nx;
             rMouseY = ny;
          }
+         var ci:int = 0;
+         while(ci < 4 && param1.bytesAvailable >= 2)
+         {
+            rCharges[ci] = param1.readUnsignedShort();
+            ci++;
+         }
       }
 
       // Host: the online guest aims player 2 with a mouse (PlayerBase.aimPointX/Y, usesPad).
       public static function p2MouseAim() : Boolean
       {
          return mode == 1 && peer && rMouseOn;
+      }
+
+      // Host: the guest's charge level for player 2's gun in this slot.
+      public static function p2Charge(param1:int) : int
+      {
+         return param1 >= 0 && param1 < 4 ? int(rCharges[param1]) : 0;
       }
 
       public static function p2MouseX() : Number
@@ -3240,6 +3314,10 @@ package Tools
          {
             changed = true;
          }
+         if(gCharges[0] + gCharges[1] + gCharges[2] + gCharges[3] > 0 && getTimer() - lastPadSent > 50)
+         {
+            changed = true;
+         }
          if(changed || lastFrameSeq != ackedSeq || getTimer() - lastPadSent > 100)
          {
             ackedSeq = lastFrameSeq;
@@ -3252,6 +3330,12 @@ package Tools
             b.writeByte(gMouseMode ? 1 : 0);
             b.writeShort(gMouseSentX);
             b.writeShort(gMouseSentY);
+            var gc:int = 0;
+            while(gc < 4)
+            {
+               b.writeShort(Math.max(0,Math.min(65535,int(gCharges[gc]))));
+               gc++;
+            }
             sendData(D_PAD,b);
             recordInput(b);
          }
@@ -4286,7 +4370,8 @@ package Tools
                   rof:param1.readUnsignedShort(),
                   off:param1.readUnsignedByte(),
                   spd:param1.readFloat(),
-                  keep:param1.readUnsignedByte() == 1
+                  keep:param1.readUnsignedByte() == 1,
+                  mc:param1.readUnsignedShort()
                });
             }
             else
@@ -4506,10 +4591,30 @@ package Tools
             while(i < param1.slots.length && i < 4)
             {
                sl = param1.slots[i];
-               if(sl && (shotTick + sl.off) % sl.rof == 0)
+               if(sl && sl.mc > 0)
+               {
+                  // Charge weapons charge while fire is held (PlayerBase.shootGuns).
+                  gCharges[i] = Math.min(sl.mc,gCharges[i] + 1);
+               }
+               else if(sl && (shotTick + sl.off) % sl.rof == 0)
                {
                   fireLocal(i,sl);
                }
+               i++;
+            }
+         }
+         else
+         {
+            // Fire released: a charge weapon with more than a little charge fires.
+            i = 0;
+            while(i < 4)
+            {
+               sl = param1 && param1.slots ? param1.slots[i] : null;
+               if(sl && sl.mc > 0 && gCharges[i] > 20 && predPad)
+               {
+                  fireLocal(i,sl,gCharges[i]);
+               }
+               gCharges[i] = 0;
                i++;
             }
          }
@@ -4548,7 +4653,7 @@ package Tools
 
       // As PlayerBase.shootGun and the gun's shoot(): muzzle at the gun's offset on the robot, aimed at the aim
       // point plus the same offset (the guns fire parallel), with the gun's own spread and speed.
-      private static function fireLocal(param1:int, param2:Object) : void
+      private static function fireLocal(param1:int, param2:Object, param3:int = 0) : void
       {
          // The aim point: the mouse, or the stick's direction at the aim radius (PlayerBase.aimPointX/Y).
          var tx:Number = gMouseMode ? gMouseX : p2DrawX + Number(predPad.aimX) * Input.aimRadius;
@@ -4569,7 +4674,7 @@ package Tools
          // shredder) with a controller lock onto an enemy instead (PlayerBase.updateLockTarget).
          var gx:Number = tx + vx;
          var gy:Number = ty + vy;
-         if((param2.k == 6 || param2.k == 7) && !gMouseMode)
+         if(param2.k >= 6 && !gMouseMode)
          {
             gx = tx;
             gy = ty;
@@ -4582,6 +4687,8 @@ package Tools
          }
          var base:Number = Math.atan2(ty + vy - my,tx + vx - mx) * 180 / Math.PI;
          var pellets:Array = [];
+         var extras:Array = [];
+         var pct:Number = param2.mc > 0 ? param3 / param2.mc : 0;
          var i:int = 0;
          var spd:Number = param2.spd;
          if(param2.k == 1 || param2.k == 3)
@@ -4618,9 +4725,43 @@ package Tools
             }
             pellets.push([Math.atan2(gy - my,gx - mx) * 180 / Math.PI + 90,0]);
          }
-         else
+         else if(param2.k == 7)
          {
             pellets.push([Math.atan2(gy - my,gx - mx) * 180 / Math.PI + (Math.random() - 0.5) * 2 + 90,spd * (7 + Math.random())]);
+         }
+         else if(param2.k == 8)
+         {
+            pellets.push([Math.atan2(gy - my,gx - mx) * 180 / Math.PI + 90,0]);
+         }
+         else if(param2.k == 9)
+         {
+            // ChargeRockets.shoot / ChargeRocket: random spread, staggered launch, random speeds.
+            var nr:int = pct * 10;
+            while(i < nr)
+            {
+               var ra:Number = Math.random() * 20;
+               if(i <= nr / 2)
+               {
+                  ra *= -1;
+               }
+               pellets.push([Math.atan2(gy - my,gx - mx) * 180 / Math.PI + 90 + ra,7 * spd * 0.8]);
+               extras.push([2.8 + Math.random() * 0.4,2.3 + Math.random() * 0.3,int(80 + Math.random() * 40),int(30 * (i / nr))]);
+               i++;
+            }
+         }
+         else
+         {
+            // ChargeGrenades.shoot; the bomblets it bursts into (ClusterGrenade.kill, ClusterBomb._init).
+            pellets.push([Math.atan2(gy - my,gx - mx) * 180 / Math.PI + 90,spd * 3]);
+            while(i < 10 * pct)
+            {
+               extras.push([(Math.random() - 0.5) * 2 * spd * 3,(Math.random() - 0.5) * 2 * spd * 3,int(30 + Math.random() * 30),0]);
+               i++;
+            }
+         }
+         if(pellets.length == 0)
+         {
+            return;
          }
          var sid:int = nextShotId;
          nextShotId = nextShotId + 1 & 1048575;
@@ -4631,6 +4772,7 @@ package Tools
          b.writeFloat(my);
          b.writeFloat(gx);
          b.writeFloat(gy);
+         b.writeShort(param3);
          b.writeByte(pellets.length);
          var sprite:BitmapData = shotSprite(param2.k,param2.lv);
          var pl:Array = null;
@@ -4662,6 +4804,16 @@ package Tools
                sy:my,
                ex:gx,
                ey:gy,
+               slot:param1,
+               dur:100 * pct + 15,
+               delay:param2.k == 9 && extras[i] ? extras[i][3] : 0,
+               bs:param2.k == 9 && extras[i] ? extras[i][0] : 0,
+               es:param2.k == 9 && extras[i] ? extras[i][1] : 0,
+               su:param2.k == 9 && extras[i] ? extras[i][2] : 1,
+               bombs:param2.k == 10 ? extras : null,
+               lv:param2.lv,
+               lastProg:-1,
+               stop:false,
                w:sprite ? sprite.width : 8,
                h:sprite ? sprite.height : 8,
                bmp:bmp,
@@ -4669,9 +4821,18 @@ package Tools
             });
             i++;
          }
+         b.writeByte(extras.length);
+         var xv:Array = null;
+         for each(xv in extras)
+         {
+            b.writeFloat(xv[0]);
+            b.writeFloat(xv[1]);
+            b.writeFloat(xv[2]);
+            b.writeFloat(xv[3]);
+         }
          sendData(D_SHOT,b);
          ++shotsCount;
-         var snd:GameSound = [null,Sounds.shoot,Sounds.shotgunShoot,Sounds.pulseShoot,Sounds.plasmaShotgunFire,Sounds.grenadeShoot,Sounds.laserShoot,Sounds.shredderFire][param2.k];
+         var snd:GameSound = [null,Sounds.shoot,Sounds.shotgunShoot,Sounds.pulseShoot,Sounds.plasmaShotgunFire,Sounds.grenadeShoot,Sounds.laserShoot,Sounds.shredderFire,Sounds.chargeLaser,Sounds.chargeMissiles,Sounds.chargeGrenade][param2.k];
          var last:Number = shotSoundAt[param2.k] === undefined ? -1000 : Number(shotSoundAt[param2.k]);
          if(snd && (param2.k == 1 ? shotTick - last >= 10 : shotTick != last))
          {
@@ -4714,6 +4875,22 @@ package Tools
       {
          var bd:BitmapData = null;
          var cls:String = SHOT_SPRITES[param1];
+         if(param1 == 8)
+         {
+            return resolveStatic("GlobalSetup::Embeds#chargeBeam_1");
+         }
+         if(param1 == 9)
+         {
+            return resolveStatic(cls + "#" + ["light","medium","heavy"][Math.max(0,Math.min(2,param2))] + "_3");
+         }
+         if(param1 == 10)
+         {
+            return resolveStatic(cls + "#imageSet_1");
+         }
+         if(param1 == 11)
+         {
+            return resolveStatic(cls + "#flyAnim_1");
+         }
          if(param1 != 5 && param2 == 1)
          {
             bd = resolveStatic(cls + "#mediumSprite");
@@ -4804,12 +4981,204 @@ package Tools
          }
       }
 
+      // ChargeLaserBullet._update: the beam runs from the gun on the robot (as drawn) to the aim / lock target for
+      // 100 x charge + 15 ticks; every 10 ticks after 15 it hits each enemy on the line or near its end (once per
+      // enemy per beam).
+      private static function moveChargeLaser(param1:Object) : void
+      {
+         ++param1.t;
+         var tx:Number = gMouseMode ? gMouseX : p2DrawX + Number(predPad ? predPad.aimX : 0) * Input.aimRadius;
+         var ty:Number = gMouseMode ? gMouseY : p2DrawY + Number(predPad ? predPad.aimY : -1) * Input.aimRadius;
+         var rot:Number = Math.atan2(ty - p2DrawY,tx - p2DrawX) * 180 / Math.PI - 90;
+         var ox:Number = GUN_OFFSET_X[param1.slot];
+         var oy:Number = GUN_OFFSET_Y[param1.slot];
+         var vx:Number = cosd(-rot) * ox + sind(-rot) * oy;
+         var vy:Number = -sind(-rot) * ox + cosd(-rot) * oy;
+         param1.sx = p2DrawX + vx;
+         param1.sy = p2DrawY + vy;
+         var ex:Number = tx + vx;
+         var ey:Number = ty + vy;
+         if(!gMouseMode)
+         {
+            ex = tx;
+            ey = ty;
+            var lock:Object = lockTarget(tx - p2DrawX,ty - p2DrawY);
+            if(lock)
+            {
+               ex = lock.x;
+               ey = lock.y;
+            }
+         }
+         if(param1.t < 15)
+         {
+            ex = param1.sx + (ex - param1.sx) * param1.t / 15;
+            ey = param1.sy + (ey - param1.sy) * param1.t / 15;
+         }
+         param1.ex = ex;
+         param1.ey = ey;
+         param1.a = Math.atan2(ey - param1.sy,ex - param1.sx) * 180 / Math.PI + 90;
+         param1.x = (param1.sx + ex) / 2;
+         param1.y = (param1.sy + ey) / 2;
+         var len:Number = Math.sqrt((ex - param1.sx) * (ex - param1.sx) + (ey - param1.sy) * (ey - param1.sy));
+         param1.scaleY = len / Math.max(1,param1.h);
+         if(param1.t > param1.dur)
+         {
+            param1.dead = true;
+            return;
+         }
+         if(param1.t % 10 == 0 && param1.t > 15)
+         {
+            var e:Object = null;
+            var r:Number = NaN;
+            for each(e in shownEnemies)
+            {
+               if(param1.hit[e.id])
+               {
+                  continue;
+               }
+               r = (e.hw + e.hh) / 2;
+               if(segmentDistance(param1.sx,param1.sy,ex,ey,e.x,e.y) < r || Math.sqrt((e.x - ex) * (e.x - ex) + (e.y - ey) * (e.y - ey)) < 20 + r)
+               {
+                  reportHit(param1,e);
+               }
+            }
+         }
+      }
+
+      private static function segmentDistance(param1:Number, param2:Number, param3:Number, param4:Number, param5:Number, param6:Number) : Number
+      {
+         var dx:Number = param3 - param1;
+         var dy:Number = param4 - param2;
+         var l2:Number = dx * dx + dy * dy;
+         var t:Number = l2 > 0 ? Math.max(0,Math.min(1,((param5 - param1) * dx + (param6 - param2) * dy) / l2)) : 0;
+         var cx:Number = param1 + dx * t - param5;
+         var cy:Number = param2 + dy * t - param6;
+         return Math.sqrt(cx * cx + cy * cy);
+      }
+
+      // ChargeRocket._update: hidden until its launch delay is over; after 30 ticks it turns at most 1 degree a
+      // tick toward the target it had at launch (giving up once more than 90 degrees off); it speeds up.
+      private static function moveRocket(param1:Object) : Boolean
+      {
+         ++param1.t;
+         if(!param1.stop && param1.t > 30)
+         {
+            var want:Number = Math.atan2(param1.ey - param1.y,param1.ex - param1.x) * 180 / Math.PI + 90;
+            var d:Number = ((want - param1.a) % 360 + 540) % 360 - 180;
+            param1.a += Math.max(-1,Math.min(1,d));
+            if(Math.abs(((want - param1.a) % 360 + 540) % 360 - 180) > 90)
+            {
+               param1.stop = true;
+            }
+         }
+         var v:Number = param1.v;
+         param1.v = param1.bs + param1.es * Math.max(0,Math.min(1,param1.t / param1.su));
+         if(param1.delay > 0)
+         {
+            --param1.delay;
+            param1.v = 0;
+            param1.hidden = true;
+         }
+         else
+         {
+            param1.hidden = false;
+         }
+         return v > 0;
+      }
+
+      // ClusterGrenade: flies to its target point over crates and bursts into its bomblets on passing it (or at
+      // the room's edge).
+      private static function burstGrenade(param1:Object) : void
+      {
+         param1.dead = true;
+         var bd:BitmapData = shotSprite(11,0);
+         var i:int = 0;
+         var bomb:Array = null;
+         for each(bomb in param1.bombs)
+         {
+            var bmp:Bitmap = new Bitmap(bd,"auto",true);
+            bmp.blendMode = BlendMode.ADD;
+            if(shotLayer)
+            {
+               shotLayer.addChild(bmp);
+            }
+            localShots.push({
+               sid:param1.sid,
+               p:i,
+               k:11,
+               x:param1.x,
+               y:param1.y,
+               dx:bomb[0],
+               dy:bomb[1],
+               kt:bomb[2],
+               a:0,
+               t:0,
+               hit:{},
+               w:bd ? bd.width : 8,
+               h:bd ? bd.height : 8,
+               bmp:bmp,
+               dead:false
+            });
+            i++;
+         }
+      }
+
+      // ClusterBomb: drifts and slows, then explodes, hitting every enemy within 60.
+      private static function moveBomb(param1:Object) : void
+      {
+         ++param1.t;
+         if(param1.t > param1.kt)
+         {
+            var e:Object = null;
+            for each(e in shownEnemies)
+            {
+               if((e.x - param1.x) * (e.x - param1.x) + (e.y - param1.y) * (e.y - param1.y) < 3600)
+               {
+                  reportHit(param1,e);
+               }
+            }
+            param1.dead = true;
+            return;
+         }
+         param1.x += param1.dx;
+         param1.y += param1.dy;
+         param1.lift = Math.sin(Math.PI * param1.t / param1.kt) * 20;
+         param1.dx *= 0.97;
+         param1.dy *= 0.97;
+      }
+
       private static function moveShot(param1:Object) : void
       {
          if(param1.k == 6)
          {
             moveLaser(param1);
             return;
+         }
+         if(param1.k == 8)
+         {
+            moveChargeLaser(param1);
+            return;
+         }
+         if(param1.k == 11)
+         {
+            moveBomb(param1);
+            return;
+         }
+         if(param1.k == 9 && !moveRocket(param1))
+         {
+            return;
+         }
+         if(param1.k == 10)
+         {
+            var len:Number = Math.sqrt((param1.ex - param1.sx) * (param1.ex - param1.sx) + (param1.ey - param1.sy) * (param1.ey - param1.sy));
+            var prog:Number = 1 - Math.sqrt((param1.ex - param1.x) * (param1.ex - param1.x) + (param1.ey - param1.y) * (param1.ey - param1.y)) / Math.max(1,len);
+            if(param1.lastProg > prog)
+            {
+               burstGrenade(param1);
+               return;
+            }
+            param1.lastProg = prog;
+            param1.prog = prog;
          }
          ++param1.t;
          var px:Number = param1.x;
@@ -4861,7 +5230,9 @@ package Tools
             return;
          }
          var e:Object = null;
-         for each(e in shownEnemies)
+         // (Cluster grenades don't hit enemies on the way.)
+         var targets:Array = param1.k == 10 ? [] : shownEnemies;
+         for each(e in targets)
          {
             if(!param1.hit[e.id] && Math.abs(param1.x - e.x) < e.hw && Math.abs(param1.y - e.y) < e.hh)
             {
@@ -4878,6 +5249,10 @@ package Tools
          var dy:int = 0;
          for each(pr in guestProps)
          {
+            if(param1.k == 10)
+            {
+               break;
+            }
             if(Math.abs(param1.x - pr.x) < (pr.w + param1.w) / 2 && Math.abs(param1.y - pr.y) < (pr.h + param1.h) / 2)
             {
                dx = px >= pr.x + pr.w / 2 ? 1 : (px <= pr.x - pr.w / 2 ? -1 : 0);
@@ -4891,8 +5266,13 @@ package Tools
       // A bullet hit a wall or a prop: pulse bullets bounce once (PulseBulletBase.hasHitWall), the rest stop.
       private static function shotWall(param1:Object, param2:int, param3:int) : void
       {
-         if(param1.k == 6)
+         if(param1.k == 6 || param1.k == 8 || param1.k == 11)
          {
+            return;
+         }
+         if(param1.k == 10)
+         {
+            burstGrenade(param1);
             return;
          }
          if(param1.k != 3 && param1.k != 4)
@@ -4935,11 +5315,45 @@ package Tools
          var m:Matrix = tmpMatrix;
          for each(b in localShots)
          {
+            if(b.k == 8)
+            {
+               // The beam animates through Embeds.chargeBeam and flickers.
+               var fr:BitmapData = resolveStatic("GlobalSetup::Embeds#chargeBeam_" + (b.t % 16 + 1));
+               if(fr && b.bmp.bitmapData != fr)
+               {
+                  b.bmp.bitmapData = fr;
+                  b.bmp.smoothing = true;
+               }
+               b.bmp.alpha = (0.5 + Math.random() * 0.5) * (b.t > b.dur - 10 ? Math.max(0,1 - (b.t - (b.dur - 10)) / 10) : 1);
+            }
+            else if(b.k == 9)
+            {
+               var rf:BitmapData = resolveStatic(SHOT_SPRITES[9] + "#" + ["light","medium","heavy"][Math.max(0,Math.min(2,int(b.lv)))] + (b.t % 10 < 5 ? "_3" : "_4"));
+               if(rf && b.bmp.bitmapData != rf)
+               {
+                  b.bmp.bitmapData = rf;
+                  b.bmp.smoothing = true;
+               }
+               b.bmp.visible = !b.hidden;
+            }
+            else if(b.k == 10)
+            {
+               var gf:BitmapData = resolveStatic(SHOT_SPRITES[10] + "#imageSet_" + Math.max(1,Math.min(32,int(Number(b.prog) * 32) + 1)));
+               if(gf && b.bmp.bitmapData != gf)
+               {
+                  b.bmp.bitmapData = gf;
+                  b.bmp.smoothing = true;
+               }
+            }
             m.identity();
             m.translate(-b.w / 2,-b.h / 2);
-            if(b.k == 6)
+            if(b.k == 6 || b.k == 8)
             {
                m.scale(1,Math.max(0.001,Number(b.scaleY) || 0));
+            }
+            if(b.k == 11)
+            {
+               m.translate(0,-(Number(b.lift) || 0));
             }
             m.rotate(b.a * Math.PI / 180);
             m.translate(b.x,b.y);

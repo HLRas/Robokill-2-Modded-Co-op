@@ -138,7 +138,8 @@ package Objects
          {
             for each(_loc8_ in gs.objects)
             {
-               if(_loc8_ is EnemyBase)
+               // Online, a copy of the guest's beam: the guest decides which enemies it hits (Net).
+               if(_loc8_ is EnemyBase && !vars["netShot"])
                {
                   _loc9_ = EnemyBase(_loc8_);
                   _loc10_ = _loc9_.collisionWidth();

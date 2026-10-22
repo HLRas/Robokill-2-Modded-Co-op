@@ -60,7 +60,7 @@ package Scenes
 
       // The mod's version, shown on the title screen (PremiumContentNotifier). Goes up by 0.01 with each update.
       // Online play only connects players with the same version.
-      public static const MOD_VERSION:String = "1.03";
+      public static const MOD_VERSION:String = "1.04";
 
       // ---- Updates ----
       // Two channels: RELEASE = the main branch on GitHub, BETA = the working-tree branch. channel.txt (written

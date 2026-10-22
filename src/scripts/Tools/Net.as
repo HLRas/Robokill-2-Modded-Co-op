@@ -37,6 +37,7 @@ package Tools
    import flash.events.Event;
    import flash.events.IOErrorEvent;
    import flash.events.KeyboardEvent;
+   import flash.events.MouseEvent;
    import flash.events.ProgressEvent;
    import flash.events.SecurityErrorEvent;
    import flash.filters.BitmapFilter;
@@ -98,6 +99,31 @@ package Tools
 
       // The other player is connected.
       public static var peer:Boolean = false;
+
+      // ---- online guest's mouse ----
+      // A guest playing with keyboard and mouse: its mouse aims (the exact point, so point weapons hit where it
+      // points) and its left button fires or clicks. It switches to mouse aim when the mouse moves or clicks, and
+      // back when a controller's right stick is used. Local co-op is unchanged.
+      private static var gMouseX:Number = 400;
+
+      private static var gMouseY:Number = 300;
+
+      private static var gMouseDown:Boolean = false;
+
+      private static var gMouseMode:Boolean = false;
+
+      private static var gMouseSentX:int = -1;
+
+      private static var gMouseSentY:int = -1;
+
+      // Host: the guest's mouse, when it aims with one.
+      private static var rMouseOn:Boolean = false;
+
+      private static var rMouseX:Number = 400;
+
+      private static var rMouseY:Number = 300;
+
+      private static var rMouseMoved:Boolean = false;
 
       // Host: the guest's latest controller values (same keys as a GameInput device), or null.
       public static var remotePad:Object = null;
@@ -526,6 +552,26 @@ package Tools
          stage.addEventListener(KeyboardEvent.KEY_UP,function(param1:KeyboardEvent):void
          {
             keys[param1.keyCode] = false;
+         });
+         stage.addEventListener(MouseEvent.MOUSE_MOVE,function(param1:MouseEvent):void
+         {
+            if(Math.abs(param1.stageX - gMouseX) + Math.abs(param1.stageY - gMouseY) > 3)
+            {
+               gMouseMode = true;
+            }
+            gMouseX = param1.stageX;
+            gMouseY = param1.stageY;
+         });
+         stage.addEventListener(MouseEvent.MOUSE_DOWN,function(param1:MouseEvent):void
+         {
+            gMouseDown = true;
+            gMouseMode = true;
+            gMouseX = param1.stageX;
+            gMouseY = param1.stageY;
+         });
+         stage.addEventListener(MouseEvent.MOUSE_UP,function(param1:MouseEvent):void
+         {
+            gMouseDown = false;
          });
          loadConfig();
       }
@@ -2857,6 +2903,42 @@ package Tools
          {
             remoteSeq = param1.readUnsignedShort();
          }
+         if(param1.bytesAvailable >= 5)
+         {
+            rMouseOn = param1.readUnsignedByte() == 1;
+            var nx:Number = param1.readShort();
+            var ny:Number = param1.readShort();
+            if(rMouseOn && (nx != rMouseX || ny != rMouseY))
+            {
+               rMouseMoved = true;
+            }
+            rMouseX = nx;
+            rMouseY = ny;
+         }
+      }
+
+      // Host: the online guest aims player 2 with a mouse (PlayerBase.aimPointX/Y, usesPad).
+      public static function p2MouseAim() : Boolean
+      {
+         return mode == 1 && peer && rMouseOn;
+      }
+
+      public static function p2MouseX() : Number
+      {
+         return rMouseX;
+      }
+
+      public static function p2MouseY() : Number
+      {
+         return rMouseY;
+      }
+
+      // Host, in menus: true once after the guest's mouse moved (Input then puts the menu cursor there).
+      public static function takeGuestMouseMove() : Boolean
+      {
+         var m:Boolean = rMouseMoved && p2MouseAim();
+         rMouseMoved = false;
+         return m;
       }
 
       // Host, once per game frame: the guest's controller, with any button pressed since the last call still
@@ -2924,6 +3006,17 @@ package Tools
             // testpad=2 only moves (firing also clicks menus).
             kb[Input.PAD_RT] = config["testpad"] == "1" ? int(tt * 2) % 2 : 0;
          }
+         // A controller's right stick takes aiming back from the mouse.
+         if(Math.abs(Number(values[Input.PAD_RX]) || 0) + Math.abs(Number(values[Input.PAD_RY]) || 0) > 0.5)
+         {
+            gMouseMode = false;
+         }
+         // The left button fires (as RT, which also clicks in menus). The aim itself is the mouse point, sent
+         // after the controls; the host aims player 2 straight at it.
+         if(gMouseMode && gMouseDown)
+         {
+            kb[Input.PAD_RT] = 1;
+         }
          var b:ByteArray = padBytes;
          b.length = 0;
          b.writeByte(PAD_CONTROLS.length);
@@ -2952,12 +3045,22 @@ package Tools
          // input's number.
          b.writeShort(lastFrameSeq & 65535);
          // Sent the moment it changes or a frame arrives, plus a refresh every 100 ms.
+         if(gMouseMode && (int(gMouseX) != gMouseSentX || int(gMouseY) != gMouseSentY))
+         {
+            changed = true;
+         }
          if(changed || lastFrameSeq != ackedSeq || getTimer() - lastPadSent > 100)
          {
             ackedSeq = lastFrameSeq;
             lastPadSent = getTimer();
             inputSeq = inputSeq + 1 & 65535;
             b.writeShort(inputSeq);
+            // Then the mouse: on/off, and the point it's at.
+            gMouseSentX = int(gMouseX);
+            gMouseSentY = int(gMouseY);
+            b.writeByte(gMouseMode ? 1 : 0);
+            b.writeShort(gMouseSentX);
+            b.writeShort(gMouseSentY);
             sendData(D_PAD,b);
             recordInput(b);
          }
@@ -4148,16 +4251,22 @@ package Tools
       // point plus the same offset (the guns fire parallel), with the gun's own spread and speed.
       private static function fireLocal(param1:int, param2:Object) : void
       {
-         var ax:Number = Number(predPad.aimX);
-         var ay:Number = Number(predPad.aimY);
-         var rot:Number = Math.atan2(ay,ax) * 180 / Math.PI - 90;
+         // The aim point: the mouse, or the stick's direction at the aim radius (PlayerBase.aimPointX/Y).
+         var tx:Number = gMouseMode ? gMouseX : p2DrawX + Number(predPad.aimX) * Input.aimRadius;
+         var ty:Number = gMouseMode ? gMouseY : p2DrawY + Number(predPad.aimY) * Input.aimRadius;
+         // As PlayerBase.handleFiring: no shooting with the aim point on the robot.
+         if((tx - p2DrawX) * (tx - p2DrawX) + (ty - p2DrawY) * (ty - p2DrawY) < 32 * 32)
+         {
+            return;
+         }
+         var rot:Number = Math.atan2(ty - p2DrawY,tx - p2DrawX) * 180 / Math.PI - 90;
          var ox:Number = GUN_OFFSET_X[param1];
          var oy:Number = GUN_OFFSET_Y[param1];
          var vx:Number = cosd(-rot) * ox + sind(-rot) * oy;
          var vy:Number = -sind(-rot) * ox + cosd(-rot) * oy;
          var mx:Number = p2DrawX + vx;
          var my:Number = p2DrawY + vy;
-         var base:Number = Math.atan2(p2DrawY + ay * Input.aimRadius + vy - my,p2DrawX + ax * Input.aimRadius + vx - mx) * 180 / Math.PI;
+         var base:Number = Math.atan2(ty + vy - my,tx + vx - mx) * 180 / Math.PI;
          var pellets:Array = [];
          var i:int = 0;
          var spd:Number = param2.spd;
@@ -4531,8 +4640,8 @@ package Tools
          var aimY:Number = predPad ? Number(predPad.aimY) : -1;
          var hax:Number = d0.ax + (d1.ax - d0.ax) * param3;
          var hay:Number = d0.ay + (d1.ay - d0.ay) * param3;
-         p2CurX = hx + p2OffX + aimX * Input.aimRadius - hax;
-         p2CurY = hy + p2OffY + aimY * Input.aimRadius - hay;
+         p2CurX = gMouseMode ? gMouseX - hax : hx + p2OffX + aimX * Input.aimRadius - hax;
+         p2CurY = gMouseMode ? gMouseY - hay : hy + p2OffY + aimY * Input.aimRadius - hay;
          predLog.push({
             t:param4,
             px:hx + p2OffX,

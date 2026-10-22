@@ -141,7 +141,9 @@ package Objects
                   {
                      if(MainScene(gs).player.hasKeysFor(targetGridX,targetGridY))
                      {
-                        if(distanceToObject(MainScene(gs).player) < 100)
+                        // Either player can use the (shared) key: a door isn't a GameObjectBase, so "player" here is
+                        // always player 1, and player 2 used to walk past a locked door without spending the key.
+                        if(distanceToObject(MainScene(gs).player) < 100 || MainScene(gs).player2 && !MainScene(gs).player2._removed && distanceToObject(MainScene(gs).player2) < 100)
                         {
                            _loc4_ = MainScene(gs).player.removeKey(MainScene(gs).player.keyTypeFor(targetGridX,targetGridY));
                            _loc5_ = MainScene(gs).player.hudKeys.copyIcon(_loc4_);

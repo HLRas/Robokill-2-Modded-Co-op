@@ -12,3 +12,4 @@ Tools/Net.as
 InventoryScreen/PauseMenu.as
 PremiumContent/PremiumContentNotifier.as
 GameLevels/GameLevel.as
+Objects/Door.as

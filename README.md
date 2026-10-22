@@ -66,7 +66,7 @@ Press **F9** in-game to see raw controller values, which helps if buttons are ma
 A friend can join over the internet as Player 2.
 
 - **Host:** start a mission and pause. The pause menu shows **ONLINE: JOIN CODE: XXXXXX**. Give your friend the code.
-- **Friend:** on the title screen choose **JOIN ONLINE**, type the code and press **CONNECT**. They see your game and play Player 2 with their controller, or the keyboard: **WASD** move, **arrow keys** aim and fire, **Space / Shift** items, **I** inventory, **M** map, **P** pause, **Enter** to click in menus.
+- **Friend:** on the title screen choose **JOIN ONLINE**, type the code and press **CONNECT**. They see your game and play Player 2 with their controller, or keyboard and mouse: **WASD** move, the **mouse** aims and **left button** fires (and clicks in menus; arrow keys also aim and fire), **Space / Shift** items, **I** inventory, **M** map, **P** pause, **Enter** to click in menus. Moving the mouse switches to mouse aim; using a controller's right stick switches back.
 - **Leaving:** the friend presses **ESC** (or holds **BACK** for 3 seconds). If they reconnect with the same code, they spawn again.
 
 **Setup:** nothing. The exe connects to a built-in server, a small free relay on Oracle Cloud in Johannesburg. To run your own, see [relay/README.md](relay/README.md) and set `relay=<ip>:7777` in `online.txt` next to the exe (both players).

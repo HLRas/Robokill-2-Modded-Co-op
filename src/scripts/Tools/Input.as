@@ -953,6 +953,13 @@ package Tools
          }
          padCursorX += (menuPad.lsX * menuPad.lsMag + menuPad.rsX * menuPad.rsMag) * cursorSpeed + menuPad.dpx * cursorSpeed * 0.5;
          padCursorY += (menuPad.lsY * menuPad.lsMag + menuPad.rsY * menuPad.rsMag) * cursorSpeed + menuPad.dpy * cursorSpeed * 0.5;
+         // An online guest with a mouse points the menu cursor directly (its button arrives as RT, which clicks).
+         if(Net.takeGuestMouseMove())
+         {
+            padMode = true;
+            padCursorX = Net.p2MouseX();
+            padCursorY = Net.p2MouseY();
+         }
          if(stage)
          {
             padCursorX = Math.max(0,Math.min(stage.stageWidth,padCursorX));

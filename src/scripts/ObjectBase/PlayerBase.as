@@ -688,6 +688,10 @@ package ObjectBase
       // Where this player is aiming: the mouse (or player 1's pad) for player 1, the right stick for player 2.
       public function aimPointX() : Number
       {
+         if(partner && Net.p2MouseAim())
+         {
+            return Net.p2MouseX();
+         }
          if(partner)
          {
             return basex + Number(Input.i.p2Pad.aimX) * Input.aimRadius;
@@ -697,6 +701,10 @@ package ObjectBase
 
       public function aimPointY() : Number
       {
+         if(partner && Net.p2MouseAim())
+         {
+            return Net.p2MouseY();
+         }
          if(partner)
          {
             return basey + Number(Input.i.p2Pad.aimY) * Input.aimRadius;
@@ -715,7 +723,12 @@ package ObjectBase
 
       public function usesPad() : Boolean
       {
-         return partner != null || Input.i.padMode;
+         // An online guest aiming with a mouse aims like player 1 with a mouse (point weapons hit at the cursor).
+         if(partner)
+         {
+            return !Net.p2MouseAim();
+         }
+         return Input.i.padMode;
       }
 
       // Weapons that hit at the aim point rather than firing along the aim line: lasers, the shredder,

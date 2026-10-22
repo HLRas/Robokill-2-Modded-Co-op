@@ -1489,7 +1489,11 @@ package Scenes
                            {
                               if(EnemyBase(_loc7_).collidesWithPlayer)
                               {
-                                 enemyTouchesPlayer(EnemyBase(_loc7_),PlayerBase(_loc6_));
+                                 // Online, player 2's guest decides which enemies touch it (Net).
+                                 if(!(_loc6_ == player2 && Net.guestDodges()))
+                                 {
+                                    enemyTouchesPlayer(EnemyBase(_loc7_),PlayerBase(_loc6_));
+                                 }
                                  continue;
                               }
                            }
@@ -1497,7 +1501,10 @@ package Scenes
                            {
                               if(EnemyBase(_loc6_).collidesWithPlayer)
                               {
-                                 enemyTouchesPlayer(EnemyBase(_loc6_),PlayerBase(_loc7_));
+                                 if(!(_loc7_ == player2 && Net.guestDodges()))
+                                 {
+                                    enemyTouchesPlayer(EnemyBase(_loc6_),PlayerBase(_loc7_));
+                                 }
                                  continue;
                               }
                            }

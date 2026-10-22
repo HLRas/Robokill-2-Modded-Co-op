@@ -13,3 +13,5 @@ InventoryScreen/PauseMenu.as
 PremiumContent/PremiumContentNotifier.as
 GameLevels/GameLevel.as
 Objects/Door.as
+ObjectBase/LaserBulletBase.as
+ObjectBase/FastLaserBulletBase.as

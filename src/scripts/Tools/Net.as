@@ -5,8 +5,10 @@ package Tools
    import GameObject.GameObject;
    import ObjectBase.BulletBase;
    import ObjectBase.EnemyBase;
+   import ObjectBase.EnemyBulletBase;
    import ObjectBase.FloorDecalBase;
    import ObjectBase.GameObjectBase;
+   import ObjectBase.PickupBase;
    import ObjectBase.PlayerBase;
    import ObjectBase.TreasureChestBase;
    import Objects.FloorProp;
@@ -14,6 +16,8 @@ package Tools
    import WeaponPlugin.WeaponPluginFlyThrough;
    import Weapons.Blaster;
    import Weapons.Grenade;
+   import Weapons.Laser;
+   import Weapons.Shredder;
    import Weapons.PlasmaShotgun;
    import Weapons.PulseGun;
    import Weapons.Shotgun;
@@ -190,11 +194,17 @@ package Tools
 
       private static const D_HIT:int = 15;
 
+      // Guest -> host: an enemy bullet touched player 2 on the guest's screen (bullet id).
+      private static const D_PHIT:int = 16;
+
+      // Guest -> host: an enemy is touching player 2 on the guest's screen (enemy id, game ticks covered).
+      private static const D_PTOUCH:int = 17;
+
       // Guns whose shots the guest simulates itself (by WeaponBase class; see shotKind): their bullet sprites and
       // whether they're drawn additively. Other guns (lasers, charge weapons, shredder) are still fired by the host.
-      private static const SHOT_SPRITES:Array = [null,"ObjectConstructors::Bullet_constructor","ObjectConstructors::ShotgunBullet_constructor","ObjectConstructors::PulseBullet_constructor","ObjectConstructors::PulseShotgunBullet_constructor","ObjectConstructors::GrenadeBullet_constructor"];
+      private static const SHOT_SPRITES:Array = [null,"ObjectConstructors::Bullet_constructor","ObjectConstructors::ShotgunBullet_constructor","ObjectConstructors::PulseBullet_constructor","ObjectConstructors::PulseShotgunBullet_constructor","ObjectConstructors::GrenadeBullet_constructor","ObjectConstructors::LaserBullet_constructor","ObjectConstructors::FastLaserBullet_constructor"];
 
-      private static const SHOT_ADD:Array = [false,true,false,true,true,false];
+      private static const SHOT_ADD:Array = [false,true,false,true,true,false,true,true];
 
       private static const GUN_OFFSET_X:Array = [6,-6,16,-16];
 
@@ -347,6 +357,35 @@ package Tools
       private static var shotBounds:Object = null;
 
       private static var shotLayer:Sprite;
+
+      // Host: sound channels of the guest's shots. The host's player hears them; they aren't mirrored, because the
+      // guest plays its own at once.
+      private static var guestChans:Dictionary = new Dictionary(true);
+
+      // Guest: the shot tick each kind of gun last played its sound (PlayerBase.doSound plays each kind at most
+      // once per tick, the blaster at most every 10 ticks).
+      private static var shotSoundAt:Object = {};
+
+      // ---- enemy bullets vs player 2 ----
+      // The guest decides which enemy bullets hit player 2: one that touches the robot as the guest draws it hits;
+      // one the guest dodged doesn't. The host doesn't test enemy bullets against an online player 2 itself.
+
+      // Host: enemy bullets that can hit, by display object, and their display ids this frame.
+      private static var enemyBulletDisp:Dictionary = new Dictionary(true);
+
+      private static var enemyBulletOid:Object = {};
+
+      // Guest: enemy bullets already reported (and hidden here), by id -> time.
+      private static var dodgeHit:Object = {};
+
+      private static var dodgeHideOids:Object = {};
+
+      private static var pHitsCount:int = 0;
+
+      // Guest: when touches were last checked, and player 2's size for touching (GameObjectBase.dist).
+      private static var touchAt:int = 0;
+
+      private static var p2Dist:Number = 20;
 
       // Stats: guest shots fired and hits reported; host shots and hits applied.
       private static var shotsCount:int = 0;
@@ -1316,17 +1355,30 @@ package Tools
             markDisplay(cur,2);
          }
          var o:GameObject = null;
+         enemyBulletOid = {};
          for each(o in p.gs.objects)
          {
             if(o is BulletBase && o.vars["netShot"] && !o._removed && o.obj)
             {
                markDisplay(o.obj,3);
             }
+            if(o is EnemyBulletBase && !o._removed && o.obj && EnemyBulletBase(o).canHitPlayer)
+            {
+               p2Objects[o.obj] = 4;
+               enemyBulletDisp[o.obj] = o;
+            }
          }
       }
 
-      // Guns the guest fires itself: 1 Blaster, 2 Shotgun, 3 PulseGun, 4 PlasmaShotgun, 5 Grenade; 0 = the host
-      // fires it.
+      // Called by player 2's PlayerBase.handleCollisions: true when the online guest decides which enemy bullets
+      // hit player 2 (so the host doesn't test them).
+      public static function guestDodges() : Boolean
+      {
+         return mode == 1 && peer && config["localdodge"] != "0";
+      }
+
+      // Guns the guest fires itself: 1 Blaster, 2 Shotgun, 3 PulseGun, 4 PlasmaShotgun, 5 Grenade, 6 Laser,
+      // 7 Shredder; 0 = the host fires it (the charge weapons).
       private static function shotKind(param1:Object) : int
       {
          if(param1 is Blaster)
@@ -1348,6 +1400,14 @@ package Tools
          if(param1 is Grenade)
          {
             return 5;
+         }
+         if(param1 is Laser)
+         {
+            return 6;
+         }
+         if(param1 is Shredder)
+         {
+            return 7;
          }
          return 0;
       }
@@ -1393,6 +1453,7 @@ package Tools
             }
             i++;
          }
+         param1.writeByte(Math.max(0,Math.min(255,Math.round(param2.dist))));
          var o:GameObject = null;
          var e:EnemyBase = null;
          var eb:ByteArray = new ByteArray();
@@ -1409,6 +1470,9 @@ package Tools
             eb.writeShort(clampShort(e.basey * 4));
             eb.writeByte(Math.min(255,Math.round(e.collisionWidth() / 2)));
             eb.writeByte(Math.min(255,Math.round(e.collisionHeight() / 2)));
+            // Touching: within dist + player 2's dist (MainScene's enemy/player check), if it touches at all.
+            eb.writeByte(e.collidesWithPlayer ? Math.max(0,Math.min(255,Math.round(e.dist))) : 0);
+            eb.writeByte(PlayerBase.isLockable(e) ? 1 : 0);
             n++;
          }
          writeVar(param1,n);
@@ -1454,6 +1518,107 @@ package Tools
          {
             writeVar(param1,oid);
          }
+         // Things player 2 can touch: enemy bullets that can hit (0) and pickups (1). Id, kind, display id,
+         // position, and how close to player 2's centre counts as touching (GameObjectBase.spriteCollidesWith with
+         // the object's fudge).
+         var bb:ByteArray = new ByteArray();
+         var b:GameObjectBase = null;
+         n = 0;
+         if(guestDodges())
+         {
+            for each(o in param2.gs.objects)
+            {
+               b = o as GameObjectBase;
+               if(!b || b._removed || !(b is EnemyBulletBase && EnemyBulletBase(b).canHitPlayer || b is PickupBase))
+               {
+                  continue;
+               }
+               writeVar(bb,b.id);
+               bb.writeByte(b is PickupBase ? 1 : 0);
+               writeVar(bb,int(enemyBulletOid[b.id]));
+               bb.writeShort(clampShort(b.basex * 4));
+               bb.writeShort(clampShort(b.basey * 4));
+               bb.writeByte(Math.min(255,Math.round(b.collisionFudge * (param2.baseWidth + b.baseWidth) / 2)));
+               bb.writeByte(Math.min(255,Math.round(b.collisionFudge * (param2.baseHeight + b.baseHeight) / 2)));
+               n++;
+            }
+         }
+         writeVar(param1,n);
+         param1.writeBytes(bb);
+      }
+
+      // Host: an enemy touches player 2 on the guest's screen: its handlePlayerCollision as player 2, once per
+      // game tick covered (as MainScene.enemyTouchesPlayer does every tick they touch).
+      private static function hostTouch(param1:ByteArray) : void
+      {
+         var eid:int = readVar(param1);
+         var n:int = Math.min(5,param1.readUnsignedByte());
+         var p:PlayerBase = player2;
+         var ms:MainScene = p ? p.gs as MainScene : null;
+         if(!ms || p._removed || p.falling)
+         {
+            return;
+         }
+         var o:GameObject = null;
+         for each(o in ms.objects)
+         {
+            if(o is EnemyBase && o.id == eid)
+            {
+               var prev:PlayerBase = ms.player;
+               ms.player = p;
+               try
+               {
+                  while(n-- > 0 && !o._removed && !p._removed)
+                  {
+                     EnemyBase(o).handlePlayerCollision();
+                  }
+                  ++pHitsCount;
+               }
+               catch(e:Error)
+               {
+               }
+               ms.player = prev;
+               return;
+            }
+         }
+      }
+
+      // Host: an enemy bullet hit player 2, or player 2 touched a pickup, on the guest's screen: the object's own
+      // handlePlayerCollision, as player 2 (shield, damage, death, collecting as usual).
+      private static function hostPlayerHit(param1:ByteArray) : void
+      {
+         var bid:int = readVar(param1);
+         var p:PlayerBase = player2;
+         var ms:MainScene = p ? p.gs as MainScene : null;
+         if(!ms || p._removed || p.falling)
+         {
+            return;
+         }
+         var o:GameObject = null;
+         for each(o in ms.objects)
+         {
+            if((o is EnemyBulletBase || o is PickupBase) && o.id == bid)
+            {
+               if(!o._removed && (o is PickupBase || EnemyBulletBase(o).canHitPlayer))
+               {
+                  var prev:PlayerBase = ms.player;
+                  ms.player = p;
+                  try
+                  {
+                     GameObjectBase(o).handlePlayerCollision();
+                     if(o is EnemyBulletBase)
+                     {
+                        ++pHitsCount;
+                     }
+                  }
+                  catch(e:Error)
+                  {
+                  }
+                  ms.player = prev;
+               }
+               return;
+            }
+         }
       }
 
       // Host: a guest shot. The gun makes its bullets as usual, then they get the guest's angles and speeds and no
@@ -1464,6 +1629,8 @@ package Tools
          var slot:int = param1.readUnsignedByte();
          var mx:Number = param1.readFloat();
          var my:Number = param1.readFloat();
+         var tx:Number = param1.readFloat();
+         var ty:Number = param1.readFloat();
          var n:int = param1.readUnsignedByte();
          var pellets:Array = [];
          while(n-- > 0)
@@ -1486,7 +1653,7 @@ package Tools
          var n0:int = int(ms.objects.length);
          try
          {
-            w.shoot(ms,mx,my,mx,my - 100);
+            w.shoot(ms,mx,my,tx,ty);
          }
          catch(e:Error)
          {
@@ -1507,7 +1674,8 @@ package Tools
          while(i < made.length)
          {
             b = made[i];
-            if(i < pellets.length)
+            // (A laser's beam is set by its start and end, not an angle.)
+            if(i < pellets.length && !(w is Laser))
             {
                b.setAngle(pellets[i][0]);
                b.speed = pellets[i][1];
@@ -1522,12 +1690,18 @@ package Tools
             list:made
          };
          ++shotsCount;
+         var nChans:int = int(GameSoundChannel.allChannels.length);
          try
          {
             p.remoteShotEffects(w,slot);
          }
          catch(e:Error)
          {
+         }
+         while(nChans < GameSoundChannel.allChannels.length)
+         {
+            guestChans[GameSoundChannel.allChannels[nChans]] = true;
+            nChans++;
          }
          var k:String = null;
          for(k in netShots)
@@ -1802,6 +1976,13 @@ package Tools
             else if(p2Objects[param1] == 3)
             {
                p2HideOids.push(oid);
+            }
+            else if(p2Objects[param1] == 4)
+            {
+               if(enemyBulletDisp[param1])
+               {
+                  enemyBulletOid[enemyBulletDisp[param1].id] = oid;
+               }
             }
             else
             {
@@ -2825,7 +3006,7 @@ package Tools
          var list:Array = [];
          for each(gsc in GameSoundChannel.allChannels)
          {
-            if(gsc._playing && gsc.chan && gsc.gs && !gsc._remove)
+            if(gsc._playing && gsc.chan && gsc.gs && !gsc._remove && !guestChans[gsc])
             {
                list.push(gsc);
             }
@@ -2871,6 +3052,16 @@ package Tools
          if(kind == D_HIT)
          {
             hostHit(param1);
+            return;
+         }
+         if(kind == D_PHIT)
+         {
+            hostPlayerHit(param1);
+            return;
+         }
+         if(kind == D_PTOUCH)
+         {
+            hostTouch(param1);
             return;
          }
          if(kind != D_PAD)
@@ -3307,6 +3498,7 @@ package Tools
          }
          updatePrediction(s0,s1,f,now);
          updateShots(s0,s1,f,now);
+         checkDodges(s0,s1,f,now);
          drawSnapshot(s0,s1,f,prevSnap,ex);
       }
 
@@ -3355,7 +3547,7 @@ package Tools
             }
             ps = poolState[k];
             bd = images[e.img];
-            if(!bd || hide && hide[e.oid])
+            if(!bd || hide && hide[e.oid] || dodgeHideOids[e.oid] !== undefined)
             {
                bmp.visible = false;
                k++;
@@ -3501,11 +3693,11 @@ package Tools
          var line:String = "ONLINE OFF";
          if(mode == 1)
          {
-            line = "HOST  rtt " + Math.round(rtt) + " (min " + Math.round(rttMin) + ") ms  server " + pingText() + "  up " + Math.round(bytesOut / 1024 / secs) + " KB/s  capture " + captureMs.toFixed(1) + " ms  skipped " + framesSkipped + "  pics " + bulk.length + "/" + Math.round(bulkWindow / 1024) + "K  obj " + frameCount + "  p2 shots " + shotsCount + " hits " + hitsCount + (peer ? "" : "  waiting");
+            line = "HOST  rtt " + Math.round(rtt) + " (min " + Math.round(rttMin) + ") ms  server " + pingText() + "  up " + Math.round(bytesOut / 1024 / secs) + " KB/s  capture " + captureMs.toFixed(1) + " ms  skipped " + framesSkipped + "  pics " + bulk.length + "/" + Math.round(bulkWindow / 1024) + "K  obj " + frameCount + "  p2 shots " + shotsCount + " hits " + hitsCount + " hit by " + pHitsCount + (peer ? "" : "  waiting");
          }
          else if(mode == 2)
          {
-            line = "GUEST  rtt " + Math.round(hostRtt) + " ms  server " + pingText() + "  down " + Math.round(bytesIn / 1024 / secs) + " KB/s  frames " + Math.round(framesIn / secs) + "/s  jitter " + Math.round(jitter) + "  delay " + Math.round(isNaN(playOffset) ? 0 : playOffset - clockBase) + " ms  late " + underruns + "  queued " + snaps.length + "   player 2 off " + Math.round(lagErr) + ">" + Math.round(predErr) + " fix " + predCorr.toFixed(1) + " px  shots " + shotsCount + " hits " + hitsCount;
+            line = "GUEST  rtt " + Math.round(hostRtt) + " ms  server " + pingText() + "  down " + Math.round(bytesIn / 1024 / secs) + " KB/s  frames " + Math.round(framesIn / secs) + "/s  jitter " + Math.round(jitter) + "  delay " + Math.round(isNaN(playOffset) ? 0 : playOffset - clockBase) + " ms  late " + underruns + "  queued " + snaps.length + "   player 2 off " + Math.round(lagErr) + ">" + Math.round(predErr) + " fix " + predCorr.toFixed(1) + " px  shots " + shotsCount + " hits " + hitsCount + "  hit by " + pHitsCount;
          }
          bytesOut = bytesIn = framesIn = framesSkipped = 0;
          statsText.text = " " + line + "   (F8)";
@@ -4103,6 +4295,7 @@ package Tools
             }
          }
          param2.slots = slots;
+         p2Dist = param1.readUnsignedByte();
          var enemies:Array = [];
          n = readVar(param1);
          while(n-- > 0)
@@ -4112,7 +4305,9 @@ package Tools
                x:param1.readShort() / 4,
                y:param1.readShort() / 4,
                hw:param1.readUnsignedByte(),
-               hh:param1.readUnsignedByte()
+               hh:param1.readUnsignedByte(),
+               d:param1.readUnsignedByte(),
+               lock:param1.readUnsignedByte() == 1
             });
          }
          param2.enemies = enemies;
@@ -4135,6 +4330,108 @@ package Tools
          while(n-- > 0)
          {
             param2.hide[readVar(param1)] = true;
+         }
+         var eb:Array = [];
+         n = readVar(param1);
+         while(n-- > 0)
+         {
+            eb.push({
+               id:readVar(param1),
+               pickup:param1.readUnsignedByte() == 1,
+               oid:readVar(param1),
+               x:param1.readShort() / 4,
+               y:param1.readShort() / 4,
+               ex:param1.readUnsignedByte(),
+               ey:param1.readUnsignedByte()
+            });
+         }
+         param2.ebullets = eb;
+      }
+
+      // Guest, each frame: enemy bullets (where they're shown) that touch player 2 (where it's drawn) hit it.
+      private static function checkDodges(param1:Object, param2:Object, param3:Number, param4:int) : void
+      {
+         var k:String = null;
+         for(k in dodgeHit)
+         {
+            if(param4 - dodgeHit[k] > 2000)
+            {
+               delete dodgeHit[k];
+            }
+         }
+         for(k in dodgeHideOids)
+         {
+            if(param4 - dodgeHideOids[k] > 2000)
+            {
+               delete dodgeHideOids[k];
+            }
+         }
+         var S:Object = snaps[snaps.length - 1].p2;
+         var ticks:int = Math.max(1,Math.min(5,Math.round((param4 - touchAt) / 10)));
+         touchAt = param4;
+         if(!S || !param1.p2 || !param1.p2.ebullets)
+         {
+            return;
+         }
+         // Enemies touching the robot as drawn (shownEnemies is this frame's, from updateShots).
+         var se:Object = null;
+         var dx:Number = NaN;
+         var dy:Number = NaN;
+         for each(se in shownEnemies)
+         {
+            if(se.d <= 0)
+            {
+               continue;
+            }
+            dx = se.x - p2DrawX;
+            dy = se.y - p2DrawY;
+            if(dx * dx + dy * dy < (se.d + p2Dist) * (se.d + p2Dist))
+            {
+               var tb:ByteArray = new ByteArray();
+               writeVar(tb,se.id);
+               tb.writeByte(ticks);
+               sendData(D_PTOUCH,tb);
+            }
+         }
+         var next:Object = {};
+         var e:Object = null;
+         if(param2 && param2.p2 && param2.p2.ebullets)
+         {
+            for each(e in param2.p2.ebullets)
+            {
+               next[e.id] = e;
+            }
+         }
+         var e1:Object = null;
+         var x:Number = NaN;
+         var y:Number = NaN;
+         for each(e in param1.p2.ebullets)
+         {
+            // A bullet is reported once; a pickup again every 300 ms while touching (one still flying in can't be
+            // collected yet).
+            if(dodgeHit[e.id] !== undefined && (!e.pickup || param4 - dodgeHit[e.id] < 300))
+            {
+               continue;
+            }
+            e1 = next[e.id];
+            x = e1 ? e.x + (e1.x - e.x) * param3 : e.x;
+            y = e1 ? e.y + (e1.y - e.y) * param3 : e.y;
+            if(Math.abs(x - p2DrawX) < e.ex && Math.abs(y - p2DrawY) < e.ey)
+            {
+               dodgeHit[e.id] = param4;
+               // A bullet that hit disappears here at once.
+               if(e.oid && !e.pickup)
+               {
+                  dodgeHideOids[e.oid] = param4;
+               }
+               var b:ByteArray = new ByteArray();
+               writeVar(b,e.id);
+               sendData(D_PHIT,b);
+               if(!e.pickup)
+               {
+                  ++pHitsCount;
+               }
+            }
          }
       }
 
@@ -4165,7 +4462,9 @@ package Tools
                   x:e1 ? e.x + (e1.x - e.x) * param3 : e.x,
                   y:e1 ? e.y + (e1.y - e.y) * param3 : e.y,
                   hw:e.hw,
-                  hh:e.hh
+                  hh:e.hh,
+                  d:e.d,
+                  lock:e.lock
                });
             }
          }
@@ -4266,6 +4565,21 @@ package Tools
          var vy:Number = -sind(-rot) * ox + cosd(-rot) * oy;
          var mx:Number = p2DrawX + vx;
          var my:Number = p2DrawY + vy;
+         // Where the shot goes (PlayerBase.shootGun): the aim point plus the gun's offset; point weapons (laser,
+         // shredder) with a controller lock onto an enemy instead (PlayerBase.updateLockTarget).
+         var gx:Number = tx + vx;
+         var gy:Number = ty + vy;
+         if((param2.k == 6 || param2.k == 7) && !gMouseMode)
+         {
+            gx = tx;
+            gy = ty;
+            var lock:Object = lockTarget(tx - p2DrawX,ty - p2DrawY);
+            if(lock)
+            {
+               gx = lock.x;
+               gy = lock.y;
+            }
+         }
          var base:Number = Math.atan2(ty + vy - my,tx + vx - mx) * 180 / Math.PI;
          var pellets:Array = [];
          var i:int = 0;
@@ -4290,9 +4604,23 @@ package Tools
                i++;
             }
          }
-         else
+         else if(param2.k == 5)
          {
             pellets.push([base + 90,5 * spd]);
+         }
+         else if(param2.k == 6)
+         {
+            // Laser.shoot: the beam starts inside the room.
+            if(shotBounds)
+            {
+               mx = Math.max(shotBounds.sx,Math.min(shotBounds.ex,mx));
+               my = Math.max(shotBounds.sy,Math.min(shotBounds.ey,my));
+            }
+            pellets.push([Math.atan2(gy - my,gx - mx) * 180 / Math.PI + 90,0]);
+         }
+         else
+         {
+            pellets.push([Math.atan2(gy - my,gx - mx) * 180 / Math.PI + (Math.random() - 0.5) * 2 + 90,spd * (7 + Math.random())]);
          }
          var sid:int = nextShotId;
          nextShotId = nextShotId + 1 & 1048575;
@@ -4301,6 +4629,8 @@ package Tools
          b.writeByte(param1);
          b.writeFloat(mx);
          b.writeFloat(my);
+         b.writeFloat(gx);
+         b.writeFloat(gy);
          b.writeByte(pellets.length);
          var sprite:BitmapData = shotSprite(param2.k,param2.lv);
          var pl:Array = null;
@@ -4328,6 +4658,10 @@ package Tools
                lb:-100,
                keep:param2.keep,
                hit:{},
+               sx:mx,
+               sy:my,
+               ex:gx,
+               ey:gy,
                w:sprite ? sprite.width : 8,
                h:sprite ? sprite.height : 8,
                bmp:bmp,
@@ -4337,6 +4671,43 @@ package Tools
          }
          sendData(D_SHOT,b);
          ++shotsCount;
+         var snd:GameSound = [null,Sounds.shoot,Sounds.shotgunShoot,Sounds.pulseShoot,Sounds.plasmaShotgunFire,Sounds.grenadeShoot,Sounds.laserShoot,Sounds.shredderFire][param2.k];
+         var last:Number = shotSoundAt[param2.k] === undefined ? -1000 : Number(shotSoundAt[param2.k]);
+         if(snd && (param2.k == 1 ? shotTick - last >= 10 : shotTick != last))
+         {
+            shotSoundAt[param2.k] = shotTick;
+            playLocalSound(snd);
+         }
+      }
+
+      // Guest: a game sound, played here at once (this copy's own sound is muted while mirroring, so it goes
+      // straight to the Sound, at the game's volume for it and this player's sound setting).
+      private static function playLocalSound(param1:GameSound) : void
+      {
+         var g:GameSound = param1;
+         if(savedMute && savedMute[0])
+         {
+            return;
+         }
+         if(getTimer() - g.lastPlayed < g.minDelay)
+         {
+            return;
+         }
+         g.lastPlayed = getTimer();
+         if(g.alternates && g.alternates.length > 0)
+         {
+            g = g.alternates[int(Math.random() * g.alternates.length)];
+         }
+         if(g.s)
+         {
+            try
+            {
+               g.s.play(0,0,new SoundTransform(g.eqVolume * GameSound.globalSoundVolume,0));
+            }
+            catch(e:Error)
+            {
+            }
+         }
       }
 
       private static function shotSprite(param1:int, param2:int) : BitmapData
@@ -4356,8 +4727,90 @@ package Tools
 
       // One game tick of a bullet, as BulletBase._update (move, room edges, enemies) then
       // MainScene.someOtherCollision (props).
+      // The nearest lockable enemy (as shown) inside the lock cone along a direction from the drawn robot.
+      private static function lockTarget(param1:Number, param2:Number) : Object
+      {
+         var d:Number = Math.sqrt(param1 * param1 + param2 * param2);
+         if(d < 0.001)
+         {
+            return null;
+         }
+         var ux:Number = param1 / d;
+         var uy:Number = param2 / d;
+         var t:Number = Math.tan(Input.lockAngle * Math.PI / 180);
+         var best:Object = null;
+         var bestAlong:Number = 0;
+         var e:Object = null;
+         var ex:Number = NaN;
+         var ey:Number = NaN;
+         var along:Number = NaN;
+         for each(e in shownEnemies)
+         {
+            if(!e.lock)
+            {
+               continue;
+            }
+            ex = e.x - p2DrawX;
+            ey = e.y - p2DrawY;
+            along = ex * ux + ey * uy;
+            if(along > 0 && Math.abs(ex * uy - ey * ux) < along * t + e.hw && (!best || along < bestAlong))
+            {
+               best = e;
+               bestAlong = along;
+            }
+         }
+         return best;
+      }
+
+      private static function reportHit(param1:Object, param2:Object) : void
+      {
+         param1.hit[param2.id] = true;
+         var hb:ByteArray = new ByteArray();
+         writeVar(hb,param1.sid);
+         hb.writeByte(param1.p);
+         writeVar(hb,param2.id);
+         sendData(D_HIT,hb);
+         ++hitsCount;
+      }
+
+      // LaserBulletBase._update: the beam grows from start to end and back, and a third of the way through hits
+      // every enemy within 50 of the end.
+      private static function moveLaser(param1:Object) : void
+      {
+         ++param1.t;
+         var len:Number = Math.sqrt((param1.ex - param1.sx) * (param1.ex - param1.sx) + (param1.ey - param1.sy) * (param1.ey - param1.sy));
+         var dur:Number = Math.max(10,len < 600 ? len / 20 : 30) * 1.2;
+         var a:Number = Math.max(0,Math.min(1,3 * param1.t / dur));
+         var b:Number = Math.max(0,Math.min(1,1.5 * param1.t / dur - 0.5));
+         var m:Number = (a + b) / 2;
+         param1.x = param1.sx + (param1.ex - param1.sx) * m;
+         param1.y = param1.sy + (param1.ey - param1.sy) * m;
+         param1.scaleY = (a - b) * len / Math.max(1,param1.h);
+         if(param1.t > dur / 3 && !param1.done)
+         {
+            param1.done = true;
+            var e:Object = null;
+            for each(e in shownEnemies)
+            {
+               if((e.x - param1.ex) * (e.x - param1.ex) + (e.y - param1.ey) * (e.y - param1.ey) < 2500)
+               {
+                  reportHit(param1,e);
+               }
+            }
+         }
+         if(param1.t > dur)
+         {
+            param1.dead = true;
+         }
+      }
+
       private static function moveShot(param1:Object) : void
       {
+         if(param1.k == 6)
+         {
+            moveLaser(param1);
+            return;
+         }
          ++param1.t;
          var px:Number = param1.x;
          var py:Number = param1.y;
@@ -4392,19 +4845,28 @@ package Tools
             param1.dead = true;
             return;
          }
+         if(param1.k == 7 && (param1.x - param1.ex) * (param1.x - param1.ex) + (param1.y - param1.ey) * (param1.y - param1.ey) <= param1.v * param1.v / 4)
+         {
+            param1.x = param1.ex;
+            param1.y = param1.ey;
+            var se:Object = null;
+            for each(se in shownEnemies)
+            {
+               if(!param1.hit[se.id] && Math.sqrt((se.x - param1.ex) * (se.x - param1.ex) + (se.y - param1.ey) * (se.y - param1.ey)) < 20 + se.hw * 2)
+               {
+                  reportHit(param1,se);
+               }
+            }
+            param1.dead = true;
+            return;
+         }
          var e:Object = null;
          for each(e in shownEnemies)
          {
             if(!param1.hit[e.id] && Math.abs(param1.x - e.x) < e.hw && Math.abs(param1.y - e.y) < e.hh)
             {
-               param1.hit[e.id] = true;
-               var hb:ByteArray = new ByteArray();
-               writeVar(hb,param1.sid);
-               hb.writeByte(param1.p);
-               writeVar(hb,e.id);
-               sendData(D_HIT,hb);
-               ++hitsCount;
-               if(!param1.keep)
+               reportHit(param1,e);
+               if(!param1.keep || param1.k == 7)
                {
                   param1.dead = true;
                   return;
@@ -4429,6 +4891,10 @@ package Tools
       // A bullet hit a wall or a prop: pulse bullets bounce once (PulseBulletBase.hasHitWall), the rest stop.
       private static function shotWall(param1:Object, param2:int, param3:int) : void
       {
+         if(param1.k == 6)
+         {
+            return;
+         }
          if(param1.k != 3 && param1.k != 4)
          {
             param1.dead = true;
@@ -4471,6 +4937,10 @@ package Tools
          {
             m.identity();
             m.translate(-b.w / 2,-b.h / 2);
+            if(b.k == 6)
+            {
+               m.scale(1,Math.max(0.001,Number(b.scaleY) || 0));
+            }
             m.rotate(b.a * Math.PI / 180);
             m.translate(b.x,b.y);
             b.bmp.transform.matrix = m;

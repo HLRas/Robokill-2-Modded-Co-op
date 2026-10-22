@@ -65,7 +65,8 @@ package ObjectBase
                emitConditionalParticles("LaserHit",endx,endy,true);
                for each(_loc6_ in gs.objects)
                {
-                  if(_loc6_ is EnemyBase)
+                  // Online, a copy of the guest's shot: the guest decides which enemies it hits (Net).
+                  if(_loc6_ is EnemyBase && !vars["netShot"])
                   {
                      if(_loc6_.distanceToPoint(endx,endy) < 50)
                      {

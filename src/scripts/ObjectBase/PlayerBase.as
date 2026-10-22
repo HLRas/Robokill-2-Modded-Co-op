@@ -2179,6 +2179,10 @@ package ObjectBase
       public function remoteShotEffects(param1:WeaponBase, param2:int) : void
       {
          var _loc3_:String = "Shoot";
+         if(param1 is Laser)
+         {
+            _loc3_ = "LaserShoot";
+         }
          if(param1 is PulseGun)
          {
             _loc3_ = "PulseShoot";
@@ -2286,7 +2290,8 @@ package ObjectBase
                   {
                      if(!(_loc1_ is EnemyBase))
                      {
-                        if(!(_loc1_ is EnemyLaserBase) || _loc1_ is StaticLaserBase)
+                        // Online, player 2's guest decides which enemy bullets hit it (Net.checkDodges).
+                        if((!(_loc1_ is EnemyLaserBase) || _loc1_ is StaticLaserBase) && !(_loc1_ is EnemyBulletBase && partner && Net.guestDodges()))
                         {
                            if(GameObjectBase(_loc1_).spriteCollidesWith(this,GameObjectBase(_loc1_).collisionFudge))
                            {

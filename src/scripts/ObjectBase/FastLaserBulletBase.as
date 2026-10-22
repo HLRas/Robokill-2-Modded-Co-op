@@ -42,7 +42,8 @@ package ObjectBase
             doneHit = true;
             for each(_loc1_ in gs.objects)
             {
-               if(_loc1_ is EnemyBase)
+               // Online, a copy of the guest's shot: the guest decides which enemies it hits (Net).
+               if(_loc1_ is EnemyBase && !vars["netShot"])
                {
                   if(_loc1_.distanceToPoint(endx,endy) < 20 + _loc1_.baseWidth)
                   {
